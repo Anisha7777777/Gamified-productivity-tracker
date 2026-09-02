@@ -30,6 +30,12 @@
 .auth-tabs { display: flex; gap: 5px; padding: 4px; background: #f1ede3; border-radius: 12px; }
 .auth-tabs button { flex: 1; padding: 9px; color: #71786f; background: transparent; border: 0; border-radius: 9px; font-size: 12px; font-weight: 800; }
 .auth-tabs button.active { color: #fff; background: var(--green); box-shadow: 0 5px 14px rgba(52,82,62,.2); }
+.auth-back,
+.forgot-password-link { width: fit-content; padding: 0; color: var(--green); background: transparent; border: 0; font-size: 12px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+.auth-back { margin-bottom: 16px; }
+.forgot-password-link { justify-self: start; margin-top: 2px; }
+.auth-back:hover,
+.forgot-password-link:hover { color: var(--green-dark); }
 .auth-heading { margin-top: 35px; }
 .auth-heading > p { color: var(--orange); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
 .auth-heading h2 { margin-top: 7px; color: var(--ink); font: 700 32px/1.1 "Fraunces", serif; }

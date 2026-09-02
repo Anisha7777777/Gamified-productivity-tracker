@@ -32,7 +32,8 @@ app.use((_req: Request, res: Response) => {
 
 app.use(
   (error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    console.error(error);
+    // Keep server logs useful without accidentally recording credentials or tokens.
+    console.error("Request failed");
 
     if (error instanceof SyntaxError && "body" in error) {
       res.status(400).json({ message: "Request body contains invalid JSON" });

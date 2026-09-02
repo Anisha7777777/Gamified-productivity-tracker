@@ -48,6 +48,21 @@ export const getAuthRateLimit = () =>
 export const getApiRateLimit = () =>
   Number(process.env.API_RATE_LIMIT_MAX || 300);
 
+export const getPasswordResetRateLimit = () =>
+  Number(process.env.PASSWORD_RESET_RATE_LIMIT_MAX || 5);
+
+export const getPasswordResetExpiryMs = () => {
+  const minutes = Number(process.env.PASSWORD_RESET_EXPIRES_IN_MINUTES || 15);
+
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) {
+    throw new Error(
+      "PASSWORD_RESET_EXPIRES_IN_MINUTES must be a whole number from 1 to 60"
+    );
+  }
+
+  return minutes * 60_000;
+};
+
 export const validateEnvironment = () => {
   getJwtSecret();
   getAuthCookieMaxAge();

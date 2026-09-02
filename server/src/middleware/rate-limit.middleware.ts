@@ -1,6 +1,10 @@
 import rateLimit from "express-rate-limit";
 import type { Request, Response } from "express";
-import { getApiRateLimit, getAuthRateLimit } from "../config/env";
+import {
+  getApiRateLimit,
+  getAuthRateLimit,
+  getPasswordResetRateLimit,
+} from "../config/env";
 
 const jsonLimitHandler = (_request: Request, response: Response) => {
   response.status(429).json({
@@ -19,6 +23,14 @@ export const apiLimiter = rateLimit({
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1_000,
   limit: getAuthRateLimit(),
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  handler: jsonLimitHandler,
+});
+
+export const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1_000,
+  limit: getPasswordResetRateLimit(),
   standardHeaders: "draft-8",
   legacyHeaders: false,
   handler: jsonLimitHandler,

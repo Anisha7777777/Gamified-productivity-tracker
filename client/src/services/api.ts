@@ -132,6 +132,22 @@ export const changePassword = (input: {
     true
   );
 
+export const requestPasswordReset = (email: string) =>
+  request<{ message: string }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+
+export const resetPassword = (input: {
+  token: string;
+  newPassword: string;
+  confirmPassword: string;
+}) =>
+  request<{ message: string }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
 export const getTasks = () => request<Task[]>("/api/tasks", undefined, true);
 
 export const getPlayer = () => request<Player>("/api/player", undefined, true);

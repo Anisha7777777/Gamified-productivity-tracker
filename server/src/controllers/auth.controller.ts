@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { createHash, randomBytes } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { User } from "../models/user.model";
@@ -10,11 +11,23 @@ import {
   setAuthCookie,
 } from "../services/cookie.service";
 import { getOrCreatePlayer } from "../services/player.service";
+import {
+  getClientOrigin,
+  getPasswordResetExpiryMs,
+} from "../config/env";
+import {
+  isEmailDeliveryConfigured,
+  sendPasswordResetEmail,
+} from "../services/email.service";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_MAX_LENGTH = 128;
 const HASH_ROUNDS = 12;
+const PASSWORD_RESET_RESPONSE = {
+  message:
+    "If an account uses that email, a password-reset link will be sent shortly.",
+};
 
 const validateCredentials = (
   body: unknown,
@@ -73,6 +86,15 @@ const readRequestToken = (req: Request) => {
 
 const isDuplicateEmailError = (error: unknown) =>
   error instanceof mongoose.mongo.MongoServerError && error.code === 11000;
+
+const hashResetToken = (token: string) =>
+  createHash("sha256").update(token).digest("hex");
+
+const createPasswordResetUrl = (token: string) => {
+  const resetUrl = new URL(getClientOrigin());
+  resetUrl.searchParams.set("resetPasswordToken", token);
+  return resetUrl.toString();
+};
 
 export const register = async (
   req: Request,
@@ -393,6 +415,147 @@ export const updatePassword = async (
     res.json({
       message: "Password changed. Please sign in again.",
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const forgotPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!isEmailDeliveryConfigured()) {
+    res.status(503).json({
+      message: "Password recovery is temporarily unavailable. Please try again later.",
+    });
+    return;
+  }
+
+  const body = req.body as Record<string, unknown> | undefined;
+  const email =
+    typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+
+  // A generic result avoids revealing whether an email address has an account.
+  if (!EMAIL_PATTERN.test(email)) {
+    res.json(PASSWORD_RESET_RESPONSE);
+    return;
+  }
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      res.json(PASSWORD_RESET_RESPONSE);
+      return;
+    }
+
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = hashResetToken(rawToken);
+    const expiresAt = new Date(Date.now() + getPasswordResetExpiryMs());
+
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          passwordResetTokenHash: tokenHash,
+          passwordResetExpiresAt: expiresAt,
+        },
+      }
+    );
+
+    try {
+      await sendPasswordResetEmail({
+        email: user.email,
+        resetUrl: createPasswordResetUrl(rawToken),
+      });
+    } catch {
+      // A link that could not be delivered should not remain usable.
+      await User.updateOne(
+        { _id: user._id, passwordResetTokenHash: tokenHash },
+        { $unset: { passwordResetTokenHash: 1, passwordResetExpiresAt: 1 } }
+      );
+    }
+
+    res.json(PASSWORD_RESET_RESPONSE);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const resetPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+    res.status(400).json({ message: "Request body must be an object" });
+    return;
+  }
+
+  const values = req.body as Record<string, unknown>;
+  const fields = Object.keys(values);
+
+  if (
+    fields.some(
+      (field) =>
+        field !== "token" && field !== "newPassword" && field !== "confirmPassword"
+    )
+  ) {
+    res.status(400).json({
+      message: "Only token, newPassword, and confirmPassword are allowed",
+    });
+    return;
+  }
+
+  const token = typeof values.token === "string" ? values.token : "";
+  const newPassword =
+    typeof values.newPassword === "string" ? values.newPassword : "";
+  const confirmPassword =
+    typeof values.confirmPassword === "string" ? values.confirmPassword : "";
+
+  if (!token) {
+    res.status(400).json({ message: "Password-reset link is invalid or expired" });
+    return;
+  }
+
+  if (
+    newPassword.length < PASSWORD_MIN_LENGTH ||
+    newPassword.length > PASSWORD_MAX_LENGTH
+  ) {
+    res.status(400).json({
+      message: `New password must be between ${PASSWORD_MIN_LENGTH} and ${PASSWORD_MAX_LENGTH} characters`,
+    });
+    return;
+  }
+
+  if (newPassword !== confirmPassword) {
+    res.status(400).json({ message: "New password confirmation does not match" });
+    return;
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(newPassword, HASH_ROUNDS);
+    const user = await User.findOneAndUpdate(
+      {
+        passwordResetTokenHash: hashResetToken(token),
+        passwordResetExpiresAt: { $gt: new Date() },
+      },
+      {
+        $set: { password: passwordHash },
+        $unset: { passwordResetTokenHash: 1, passwordResetExpiresAt: 1 },
+        $inc: { tokenVersion: 1 },
+      },
+      { new: false }
+    );
+
+    if (!user) {
+      res.status(400).json({ message: "Password-reset link is invalid or expired" });
+      return;
+    }
+
+    clearAuthCookie(res);
+    res.json({ message: "Password reset. Please sign in with your new password." });
   } catch (error) {
     next(error);
   }

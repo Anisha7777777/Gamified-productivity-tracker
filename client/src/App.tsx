@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import "./App.css";
 import {
   AUTH_UNAUTHORIZED_EVENT,
@@ -10,7 +10,9 @@ import {
   getTasks,
   loginUser,
   logoutUser,
+  requestPasswordReset,
   registerUser,
+  resetPassword,
   updateAccount,
   updateTask,
   type AuthResponse,
@@ -67,33 +69,63 @@ function DifficultySelect({
 function AuthScreen({
   sessionMessage,
   onAuthenticated,
+  passwordResetToken,
+  onPasswordReset,
 }: {
   sessionMessage: string;
   onAuthenticated: (response: AuthResponse) => void;
+  passwordResetToken: string | null;
+  onPasswordReset: (message: string) => void;
 }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(
+    passwordResetToken ? "reset" : "login"
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
 
-  const switchMode = (nextMode: "login" | "register") => {
+  const switchMode = (nextMode: "login" | "register" | "forgot") => {
     setMode(nextMode);
     setAuthError("");
+    setAuthNotice("");
     setPassword("");
+    setConfirmPassword("");
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
     setAuthError("");
+    setAuthNotice("");
 
     try {
-      const response =
-        mode === "register"
-          ? await registerUser({ name, email, password })
-          : await loginUser({ email, password });
+      if (mode === "forgot") {
+        const response = await requestPasswordReset(email);
+        setAuthNotice(response.message);
+        return;
+      }
+
+      if (mode === "reset") {
+        if (!passwordResetToken) {
+          throw new Error("Password-reset link is missing or invalid");
+        }
+
+        const response = await resetPassword({
+          token: passwordResetToken,
+          newPassword: password,
+          confirmPassword,
+        });
+        onPasswordReset(response.message);
+        return;
+      }
+
+      const response = mode === "register"
+        ? await registerUser({ name, email, password })
+        : await loginUser({ email, password });
 
       onAuthenticated(response);
     } catch (requestError) {
@@ -124,20 +156,25 @@ function AuthScreen({
         </section>
 
         <section className="auth-form-panel">
-          <div className="auth-tabs" role="tablist" aria-label="Account action">
-            <button type="button" role="tab" aria-selected={mode === "login"}
-              className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>Sign in</button>
-            <button type="button" role="tab" aria-selected={mode === "register"}
-              className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>Create account</button>
-          </div>
+          {mode === "login" || mode === "register" ? (
+            <div className="auth-tabs" role="tablist" aria-label="Account action">
+              <button type="button" role="tab" aria-selected={mode === "login"}
+                className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>Sign in</button>
+              <button type="button" role="tab" aria-selected={mode === "register"}
+                className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>Create account</button>
+            </div>
+          ) : (
+            <button className="auth-back" type="button" onClick={() => switchMode("login")}>← Back to sign in</button>
+          )}
 
           <div className="auth-heading">
-            <p>{mode === "login" ? "WELCOME BACK" : "BEGIN YOUR JOURNEY"}</p>
-            <h2>{mode === "login" ? "Continue your quest" : "Create your adventurer"}</h2>
-            <span>{mode === "login" ? "Your progress is waiting." : "One account, one private quest log."}</span>
+            <p>{mode === "reset" ? "CHOOSE A NEW PASSWORD" : mode === "forgot" ? "RECOVER YOUR ACCOUNT" : mode === "login" ? "WELCOME BACK" : "BEGIN YOUR JOURNEY"}</p>
+            <h2>{mode === "reset" ? "Reset your password" : mode === "forgot" ? "Find your way back" : mode === "login" ? "Continue your quest" : "Create your adventurer"}</h2>
+            <span>{mode === "reset" ? "This link can be used once and expires soon." : mode === "forgot" ? "We’ll email a secure reset link if the address has an account." : mode === "login" ? "Your progress is waiting." : "One account, one private quest log."}</span>
           </div>
 
           {sessionMessage && <p className="auth-message" role="status">{sessionMessage}</p>}
+          {authNotice && <p className="auth-message" role="status">{authNotice}</p>}
           {authError && <p className="auth-error" role="alert">{authError}</p>}
 
           <form className="auth-form" onSubmit={handleSubmit}>
@@ -148,21 +185,38 @@ function AuthScreen({
                   autoComplete="name" maxLength={80} required disabled={submitting} placeholder="Your name" />
               </label>
             )}
-            <label htmlFor="auth-email">
-              <span>Email</span>
-              <input id="auth-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)}
-                autoComplete="email" required disabled={submitting} placeholder="you@example.com" />
-            </label>
-            <label htmlFor="auth-password">
-              <span>Password</span>
-              <input id="auth-password" type="password" value={password}
-                onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "register" ? "new-password" : "current-password"}
-                minLength={8} maxLength={128} required disabled={submitting} placeholder="At least 8 characters" />
-            </label>
+            {mode !== "reset" && (
+              <label htmlFor="auth-email">
+                <span>Email</span>
+                <input id="auth-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email" required disabled={submitting} placeholder="you@example.com" />
+              </label>
+            )}
+            {mode !== "forgot" && (
+              <label htmlFor="auth-password">
+                <span>{mode === "reset" ? "New password" : "Password"}</span>
+                <input id="auth-password" type="password" value={password}
+                  onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  minLength={8} maxLength={128} required disabled={submitting} placeholder="At least 8 characters" />
+              </label>
+            )}
+            {mode === "reset" && (
+              <label htmlFor="auth-confirm-password">
+                <span>Confirm new password</span>
+                <input id="auth-confirm-password" type="password" value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password"
+                  minLength={8} maxLength={128} required disabled={submitting} placeholder="Repeat your new password" />
+              </label>
+            )}
             <button className="auth-submit" type="submit" disabled={submitting}>
-              {submitting ? "Please wait…" : mode === "login" ? "Enter Questly" : "Create my account"}
+              {submitting ? "Please wait…" : mode === "forgot" ? "Email reset link" : mode === "reset" ? "Save new password" : mode === "login" ? "Enter Questly" : "Create my account"}
               <span>→</span>
             </button>
+            {mode === "login" && (
+              <button className="forgot-password-link" type="button" onClick={() => switchMode("forgot")}>
+                Forgot your password?
+              </button>
+            )}
           </form>
         </section>
       </main>
@@ -172,7 +226,17 @@ function AuthScreen({
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [authChecking, setAuthChecking] = useState(true);
+  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(() => {
+    const token = new URLSearchParams(window.location.search).get("resetPasswordToken");
+
+    if (token) {
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
+    }
+
+    return token;
+  });
+  const openedFromPasswordResetLink = useRef(passwordResetToken !== null);
+  const [authChecking, setAuthChecking] = useState(() => !passwordResetToken);
   const [authMessage, setAuthMessage] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [player, setPlayer] = useState<Player | null>(null);
@@ -235,6 +299,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (openedFromPasswordResetLink.current) {
+      return;
+    }
+
     getCurrentUser()
       .then(({ user: restoredUser }) => {
         setLoading(true);
@@ -503,11 +571,17 @@ function App() {
     );
   }
 
-  if (!user) {
+  if (!user || passwordResetToken) {
     return (
       <AuthScreen
+        key={passwordResetToken ?? "account-access"}
         sessionMessage={authMessage}
         onAuthenticated={handleAuthenticated}
+        passwordResetToken={passwordResetToken}
+        onPasswordReset={(message) => {
+          setPasswordResetToken(null);
+          setAuthMessage(message);
+        }}
       />
     );
   }

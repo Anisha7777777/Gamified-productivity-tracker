@@ -5,6 +5,8 @@ export type UserFields = {
   email: string;
   password: string;
   tokenVersion: number;
+  passwordResetTokenHash?: string;
+  passwordResetExpiresAt?: Date;
 };
 
 const userSchema = new mongoose.Schema<UserFields>(
@@ -32,6 +34,14 @@ const userSchema = new mongoose.Schema<UserFields>(
       type: Number,
       default: 0,
       min: 0,
+      select: false,
+    },
+    passwordResetTokenHash: {
+      type: String,
+      select: false,
+    },
+    passwordResetExpiresAt: {
+      type: Date,
       select: false,
     },
   },
