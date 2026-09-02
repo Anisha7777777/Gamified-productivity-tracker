@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import "./App.css";
 import {
   AUTH_UNAUTHORIZED_EVENT,
@@ -12,9 +12,11 @@ import {
   logoutUser,
   requestPasswordReset,
   registerUser,
+  resendVerification,
   resetPassword,
   updateAccount,
   updateTask,
+  verifyEmail,
   type AuthResponse,
   type Player,
   type Task,
@@ -224,19 +226,93 @@ function AuthScreen({
   );
 }
 
+function UnverifiedAccountScreen({
+  user,
+  message,
+  onUserUpdated,
+  onLogout,
+}: {
+  user: User;
+  message: string;
+  onUserUpdated: (user: User) => void;
+  onLogout: () => void;
+}) {
+  const [resending, setResending] = useState(false);
+  const [notice, setNotice] = useState(message);
+  const [error, setError] = useState("");
+
+  const handleResend = async () => {
+    setResending(true);
+    setError("");
+
+    try {
+      const response = await resendVerification();
+      onUserUpdated(response.user);
+      setNotice(response.message);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Could not send a verification email"
+      );
+    } finally {
+      setResending(false);
+    }
+  };
+
+  return (
+    <div className="auth-page">
+      <div className="auth-orbit auth-orbit-one" />
+      <div className="auth-orbit auth-orbit-two" />
+      <main className="verification-card">
+        <div className="verification-seal" aria-hidden="true">✉</div>
+        <p className="auth-kicker">ONE MORE STEP</p>
+        <h1>Check your email</h1>
+        <p>We sent a verification link to <strong>{user.email}</strong>.</p>
+        <p>Verify that address to unlock your quests, XP, and player progress.</p>
+        {notice && <p className="auth-message" role="status">{notice}</p>}
+        {error && <p className="auth-error" role="alert">{error}</p>}
+        <button className="auth-submit" type="button" disabled={resending} onClick={handleResend}>
+          {resending ? "Sending…" : "Resend verification email"}<span>→</span>
+        </button>
+        <button className="forgot-password-link verification-logout" type="button" onClick={onLogout}>
+          Log out
+        </button>
+      </main>
+    </div>
+  );
+}
+
+const readEmailActionTokens = () => {
+  const parameters = new URLSearchParams(window.location.search);
+  const passwordResetToken = parameters.get("resetPasswordToken");
+  const emailVerificationToken = parameters.get("verifyEmailToken");
+
+  if (passwordResetToken || emailVerificationToken) {
+    window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
+  }
+
+  return { passwordResetToken, emailVerificationToken };
+};
+
 function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(() => {
-    const token = new URLSearchParams(window.location.search).get("resetPasswordToken");
-
-    if (token) {
-      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
-    }
-
-    return token;
-  });
-  const openedFromPasswordResetLink = useRef(passwordResetToken !== null);
-  const [authChecking, setAuthChecking] = useState(() => !passwordResetToken);
+  const [emailActionTokens] = useState(readEmailActionTokens);
+  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(
+    emailActionTokens.passwordResetToken
+  );
+  const [emailVerificationToken, setEmailVerificationToken] = useState<string | null>(
+    emailActionTokens.emailVerificationToken
+  );
+  const [openedFromEmailActionLink] = useState(
+    () => passwordResetToken !== null || emailVerificationToken !== null
+  );
+  const [authChecking, setAuthChecking] = useState(
+    () => !openedFromEmailActionLink
+  );
+  const [verificationChecking, setVerificationChecking] = useState(
+    () => emailVerificationToken !== null
+  );
   const [authMessage, setAuthMessage] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [player, setPlayer] = useState<Player | null>(null);
@@ -252,6 +328,7 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [verificationMessage, setVerificationMessage] = useState("");
   const [xpNotice, setXpNotice] = useState<{
     message: string;
     kind: "gain" | "loss";
@@ -299,7 +376,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (openedFromPasswordResetLink.current) {
+    if (openedFromEmailActionLink) {
       return;
     }
 
@@ -315,10 +392,62 @@ function App() {
         }
       })
       .finally(() => setAuthChecking(false));
-  }, []);
+  }, [openedFromEmailActionLink]);
 
   useEffect(() => {
-    if (!user) {
+    if (!emailVerificationToken) {
+      return;
+    }
+
+    const verify = async () => {
+      try {
+        await verifyEmail(emailVerificationToken);
+
+        try {
+          const { user: currentUser } = await getCurrentUser();
+          setLoading(true);
+          setUser(currentUser);
+          setAuthMessage("");
+          setVerificationMessage(
+            "Email verified! Your quests and player progress are unlocked."
+          );
+        } catch {
+          setUser(null);
+          setAuthMessage("Email verified. Please sign in to continue.");
+        }
+      } catch (requestError) {
+        let restoredSession = false;
+
+        try {
+          const { user: currentUser } = await getCurrentUser();
+          setUser(currentUser);
+          restoredSession = true;
+        } catch {
+          setUser(null);
+        }
+
+        const message =
+          requestError instanceof Error
+            ? requestError.message
+            : "Email verification could not be completed";
+
+        if (restoredSession) {
+          setError(message);
+        } else {
+          setAuthMessage(message);
+        }
+      } finally {
+        setEmailVerificationToken(null);
+        setVerificationChecking(false);
+        setAuthChecking(false);
+      }
+    };
+
+    void verify();
+  }, [emailVerificationToken]);
+
+  useEffect(() => {
+    if (!user || !user.emailVerified) {
       return;
     }
 
@@ -407,7 +536,14 @@ function App() {
       setUser(response.user);
       setSettingsName(response.user.name);
       setSettingsEmail(response.user.email);
-      setSettingsMessage("Account details saved.");
+      if (!response.user.emailVerified) {
+        setShowSettings(false);
+        setAuthMessage(
+          "Your email changed. Check your new inbox to verify it before using quests and progression."
+        );
+      } else {
+        setSettingsMessage("Account details saved.");
+      }
     } catch (requestError) {
       setSettingsError(
         requestError instanceof Error
@@ -560,12 +696,12 @@ function App() {
     }
   };
 
-  if (authChecking) {
+  if (authChecking || verificationChecking) {
     return (
       <div className="auth-page">
         <div className="session-loader" role="status">
           <span>✦</span>
-          <p>Restoring your adventure…</p>
+          <p>{verificationChecking ? "Verifying your email…" : "Restoring your adventure…"}</p>
         </div>
       </div>
     );
@@ -582,6 +718,17 @@ function App() {
           setPasswordResetToken(null);
           setAuthMessage(message);
         }}
+      />
+    );
+  }
+
+  if (!user.emailVerified) {
+    return (
+      <UnverifiedAccountScreen
+        user={user}
+        message={authMessage}
+        onUserUpdated={setUser}
+        onLogout={handleLogout}
       />
     );
   }
@@ -721,6 +868,11 @@ function App() {
             </form>
           </section>
 
+          {verificationMessage && (
+            <p className="success-banner" role="status">
+              <span>✓</span>{verificationMessage}
+            </p>
+          )}
           {error && <p className="error-banner" role="alert"><span>!</span>{error}</p>}
 
           <section className="quest-list-section" aria-labelledby="quest-list-title">
@@ -828,6 +980,7 @@ function App() {
               <div className="settings-section-heading">
                 <h3>Profile details</h3>
                 <p>Update the name and email attached to your quests.</p>
+                <span className="email-verification-status verified">Email verified</span>
               </div>
               <label htmlFor="settings-name">
                 <span>Name</span>

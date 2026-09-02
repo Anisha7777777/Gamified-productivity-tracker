@@ -36,6 +36,15 @@
 .forgot-password-link { justify-self: start; margin-top: 2px; }
 .auth-back:hover,
 .forgot-password-link:hover { color: var(--green-dark); }
+.verification-card { position: relative; z-index: 1; display: grid; width: min(480px, 100%); padding: clamp(34px, 7vw, 58px); justify-items: center; color: var(--ink); background: var(--paper); border: 1px solid rgba(69,74,50,.12); border-radius: 30px; box-shadow: var(--shadow); text-align: center; }
+.verification-card .auth-kicker { margin-top: 18px; color: var(--orange); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
+.verification-card h1 { margin-top: 8px; font: 700 38px/1.08 "Fraunces", serif; }
+.verification-card > p:not(.auth-kicker):not(.auth-message):not(.auth-error) { max-width: 340px; margin-top: 10px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.verification-card .auth-submit { width: 100%; margin-top: 24px; }
+.verification-card .auth-message,
+.verification-card .auth-error { width: 100%; text-align: left; }
+.verification-seal { display: grid; width: 78px; height: 78px; place-items: center; color: #735d18; background: #f5d36f; border: 6px solid #fff1d1; border-radius: 50%; box-shadow: 0 12px 0 rgba(89,73,32,.14); font-size: 34px; }
+.verification-logout { margin-top: 20px; }
 .auth-heading { margin-top: 35px; }
 .auth-heading > p { color: var(--orange); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
 .auth-heading h2 { margin-top: 7px; color: var(--ink); font: 700 32px/1.1 "Fraunces", serif; }
@@ -140,6 +149,8 @@ input:disabled, select:disabled, button:disabled { cursor: wait; opacity: .58; }
 .primary-button b { display: grid; width: 27px; height: 27px; place-items: center; background: rgba(255,255,255,.15); border-radius: 8px; }
 .error-banner { display: flex; gap: 10px; align-items: center; padding: 11px 14px; margin-top: 14px; color: #8f4338; background: #fbe7dc; border: 1px solid #efc4b0; border-radius: 11px; font-size: 13px; }
 .error-banner span { display: grid; width: 20px; height: 20px; place-items: center; color: white; background: #b95f4d; border-radius: 50%; font-weight: 800; }
+.success-banner { display: flex; gap: 10px; align-items: center; padding: 11px 14px; margin-top: 14px; color: #47604e; background: #e7eee6; border: 1px solid #cadbc8; border-radius: 11px; font-size: 13px; }
+.success-banner span { display: grid; width: 20px; height: 20px; place-items: center; color: white; background: #5b8061; border-radius: 50%; font-weight: 800; }
 
 .xp-notice { position: fixed; z-index: 20; top: 24px; right: 24px; display: flex; align-items: center; gap: 9px; padding: 12px 18px; color: #fffdf6; background: #42634d; border: 1px solid rgba(255,255,255,.25); border-radius: 99px; box-shadow: 0 14px 38px rgba(43,57,45,.24); font-weight: 800; pointer-events: none; animation: notice-in .28s ease-out both; }
 .xp-notice span { color: #f3d36f; }
@@ -215,6 +226,8 @@ input:disabled, select:disabled, button:disabled { cursor: wait; opacity: .58; }
 .settings-section-heading { grid-column: 1 / -1; margin-bottom: 2px; }
 .settings-section-heading h3 { font: 700 19px "Fraunces", serif; }
 .settings-section-heading p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.email-verification-status { display: inline-block; padding: 4px 8px; margin-top: 10px; border-radius: 99px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.email-verification-status.verified { color: #42644b; background: #dcebdc; }
 .settings-form > button { height: 43px; padding: 0 16px; color: white; background: var(--green); border: 0; border-radius: 11px; font-size: 12px; font-weight: 800; white-space: nowrap; }
 .settings-form > button:hover { background: var(--green-dark); }
 .password-form { grid-template-columns: 1fr 1fr 1fr auto; }

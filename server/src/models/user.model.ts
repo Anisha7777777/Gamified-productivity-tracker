@@ -7,6 +7,9 @@ export type UserFields = {
   tokenVersion: number;
   passwordResetTokenHash?: string;
   passwordResetExpiresAt?: Date;
+  emailVerified: boolean;
+  emailVerificationTokenHash?: string;
+  emailVerificationExpiresAt?: Date;
 };
 
 const userSchema = new mongoose.Schema<UserFields>(
@@ -41,6 +44,18 @@ const userSchema = new mongoose.Schema<UserFields>(
       select: false,
     },
     passwordResetExpiresAt: {
+      type: Date,
+      select: false,
+    },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    emailVerificationTokenHash: {
+      type: String,
+      select: false,
+    },
+    emailVerificationExpiresAt: {
       type: Date,
       select: false,
     },

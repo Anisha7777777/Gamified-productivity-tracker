@@ -63,6 +63,21 @@ export const getPasswordResetExpiryMs = () => {
   return minutes * 60_000;
 };
 
+export const getEmailVerificationExpiryMs = () => {
+  const hours = Number(process.env.EMAIL_VERIFICATION_EXPIRES_HOURS || 24);
+
+  if (!Number.isInteger(hours) || hours < 1 || hours > 168) {
+    throw new Error(
+      "EMAIL_VERIFICATION_EXPIRES_HOURS must be a whole number from 1 to 168"
+    );
+  }
+
+  return hours * 3_600_000;
+};
+
+export const getVerificationResendRateLimit = () =>
+  Number(process.env.VERIFICATION_RESEND_RATE_LIMIT_MAX || 5);
+
 export const validateEnvironment = () => {
   getJwtSecret();
   getAuthCookieMaxAge();

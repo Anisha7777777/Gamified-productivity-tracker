@@ -1,8 +1,8 @@
 import bcrypt from "bcryptjs";
-import { createHash, randomBytes } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { User } from "../models/user.model";
+import { Player } from "../models/player.model";
 import { createAuthToken } from "../services/auth.service";
 import { verifyAuthToken } from "../services/auth.service";
 import {
@@ -13,12 +13,18 @@ import {
 import { getOrCreatePlayer } from "../services/player.service";
 import {
   getClientOrigin,
+  getEmailVerificationExpiryMs,
   getPasswordResetExpiryMs,
 } from "../config/env";
 import {
   isEmailDeliveryConfigured,
+  sendEmailVerificationEmail,
   sendPasswordResetEmail,
 } from "../services/email.service";
+import {
+  createSecureToken,
+  hashSecureToken,
+} from "../services/secure-token.service";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_MIN_LENGTH = 8;
@@ -67,10 +73,16 @@ const validateCredentials = (
   return null;
 };
 
-const safeUser = (user: { _id: unknown; name: string; email: string }) => ({
+const safeUser = (user: {
+  _id: unknown;
+  name: string;
+  email: string;
+  emailVerified?: boolean;
+}) => ({
   id: String(user._id),
   name: user.name,
   email: user.email,
+  emailVerified: user.emailVerified === true,
 });
 
 const readRequestToken = (req: Request) => {
@@ -87,13 +99,61 @@ const readRequestToken = (req: Request) => {
 const isDuplicateEmailError = (error: unknown) =>
   error instanceof mongoose.mongo.MongoServerError && error.code === 11000;
 
-const hashResetToken = (token: string) =>
-  createHash("sha256").update(token).digest("hex");
-
 const createPasswordResetUrl = (token: string) => {
   const resetUrl = new URL(getClientOrigin());
   resetUrl.searchParams.set("resetPasswordToken", token);
   return resetUrl.toString();
+};
+
+const createEmailVerificationUrl = (token: string) => {
+  const verificationUrl = new URL(getClientOrigin());
+  verificationUrl.searchParams.set("verifyEmailToken", token);
+  return verificationUrl.toString();
+};
+
+const createAndSendEmailVerification = async (user: {
+  _id: unknown;
+  email: string;
+}) => {
+  const rawToken = createSecureToken();
+  const tokenHash = hashSecureToken(rawToken);
+  const expiresInMs = getEmailVerificationExpiryMs();
+
+  await User.updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        emailVerificationTokenHash: tokenHash,
+        emailVerificationExpiresAt: new Date(Date.now() + expiresInMs),
+      },
+    }
+  );
+
+  try {
+    await sendEmailVerificationEmail({
+      email: user.email,
+      verificationUrl: createEmailVerificationUrl(rawToken),
+      expiresInHours: expiresInMs / 3_600_000,
+    });
+  } catch (error) {
+    // Do not retain an active link that was not delivered.
+    await User.updateOne(
+      { _id: user._id, emailVerificationTokenHash: tokenHash },
+      {
+        $unset: {
+          emailVerificationTokenHash: 1,
+          emailVerificationExpiresAt: 1,
+        },
+      }
+    );
+    throw error;
+  }
+};
+
+const emailServiceUnavailable = (res: Response) => {
+  res.status(503).json({
+    message: "Email verification is temporarily unavailable. Please try again later.",
+  });
 };
 
 export const register = async (
@@ -112,7 +172,16 @@ export const register = async (
   const email = req.body.email.trim().toLowerCase();
   const password = req.body.password;
 
+  if (!isEmailDeliveryConfigured()) {
+    emailServiceUnavailable(res);
+    return;
+  }
+
   try {
+    // Validate this setting before creating an account, so a bad setting cannot
+    // leave behind a user who cannot receive the required verification link.
+    getEmailVerificationExpiryMs();
+
     if (await User.exists({ email })) {
       res.status(409).json({ message: "An account with that email already exists" });
       return;
@@ -144,6 +213,19 @@ export const register = async (
 
     if (!createdUser) {
       throw new Error("User creation failed");
+    }
+
+    try {
+      await createAndSendEmailVerification(createdUser);
+    } catch {
+      // SMTP is outside MongoDB transactions. Compensate by removing only the
+      // brand-new account and its player before a session cookie is issued.
+      await Promise.all([
+        Player.deleteOne({ user: createdUser._id }),
+        User.deleteOne({ _id: createdUser._id }),
+      ]);
+      emailServiceUnavailable(res);
+      return;
     }
 
     const token = createAuthToken(
@@ -294,17 +376,31 @@ export const updateAccount = async (
   }
 
   try {
-    const updates: { name?: string; email?: string } = {};
+    const user = await User.findById(req.userId);
 
-    if (typeof values.name === "string") {
-      updates.name = values.name.trim();
+    if (!user) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
     }
 
-    if (typeof values.email === "string") {
-      updates.email = values.email.trim().toLowerCase();
+    const nextName =
+      typeof values.name === "string" ? values.name.trim() : user.name;
+    const nextEmail =
+      typeof values.email === "string"
+        ? values.email.trim().toLowerCase()
+        : user.email;
+    const emailChanged = nextEmail !== user.email;
+
+    if (emailChanged && !isEmailDeliveryConfigured()) {
+      emailServiceUnavailable(res);
+      return;
+    }
+
+    if (emailChanged) {
+      getEmailVerificationExpiryMs();
 
       const emailOwner = await User.exists({
-        email: updates.email,
+        email: nextEmail,
         _id: { $ne: req.userId },
       });
 
@@ -314,14 +410,29 @@ export const updateAccount = async (
       }
     }
 
-    const user = await User.findByIdAndUpdate(req.userId, updates, {
-      new: true,
-      runValidators: true,
-    });
+    const previousEmail = user.email;
+    const wasEmailVerified = user.emailVerified === true;
+    user.name = nextName;
+    user.email = nextEmail;
 
-    if (!user) {
-      res.status(401).json({ message: "Authentication required" });
-      return;
+    if (emailChanged) {
+      user.emailVerified = false;
+    }
+
+    await user.save();
+
+    if (emailChanged) {
+      try {
+        await createAndSendEmailVerification(user);
+      } catch {
+        // Keep the previously verified address usable if the replacement email
+        // could not be delivered.
+        user.email = previousEmail;
+        user.emailVerified = wasEmailVerified;
+        await user.save();
+        emailServiceUnavailable(res);
+        return;
+      }
     }
 
     res.json({ user: safeUser(user) });
@@ -450,8 +561,8 @@ export const forgotPassword = async (
       return;
     }
 
-    const rawToken = randomBytes(32).toString("hex");
-    const tokenHash = hashResetToken(rawToken);
+    const rawToken = createSecureToken();
+    const tokenHash = hashSecureToken(rawToken);
     const expiresAt = new Date(Date.now() + getPasswordResetExpiryMs());
 
     await User.updateOne(
@@ -538,7 +649,7 @@ export const resetPassword = async (
     const passwordHash = await bcrypt.hash(newPassword, HASH_ROUNDS);
     const user = await User.findOneAndUpdate(
       {
-        passwordResetTokenHash: hashResetToken(token),
+        passwordResetTokenHash: hashSecureToken(token),
         passwordResetExpiresAt: { $gt: new Date() },
       },
       {
@@ -556,6 +667,92 @@ export const resetPassword = async (
 
     clearAuthCookie(res);
     res.json({ message: "Password reset. Please sign in with your new password." });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const verifyEmail = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+    res.status(400).json({ message: "Request body must be an object" });
+    return;
+  }
+
+  const values = req.body as Record<string, unknown>;
+  const tokenValue = values.token;
+  const token = typeof tokenValue === "string" ? tokenValue : "";
+
+  if (!token) {
+    res.status(400).json({ message: "Email verification link is invalid or expired" });
+    return;
+  }
+
+  try {
+    // One conditional update makes the link single-use, even for simultaneous clicks.
+    const user = await User.findOneAndUpdate(
+      {
+        emailVerificationTokenHash: hashSecureToken(token),
+        emailVerificationExpiresAt: { $gt: new Date() },
+      },
+      {
+        $set: { emailVerified: true },
+        $unset: {
+          emailVerificationTokenHash: 1,
+          emailVerificationExpiresAt: 1,
+        },
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      res.status(400).json({ message: "Email verification link is invalid or expired" });
+      return;
+    }
+
+    res.json({ user: safeUser(user) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const resendVerification = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!isEmailDeliveryConfigured()) {
+    emailServiceUnavailable(res);
+    return;
+  }
+
+  try {
+    const user = await User.findById(req.userId);
+
+    if (!user) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
+    }
+
+    if (user.emailVerified === true) {
+      res.json({ message: "Your email is already verified", user: safeUser(user) });
+      return;
+    }
+
+    try {
+      await createAndSendEmailVerification(user);
+    } catch {
+      emailServiceUnavailable(res);
+      return;
+    }
+
+    res.json({
+      message: "A new verification link has been sent to your email address.",
+      user: safeUser(user),
+    });
   } catch (error) {
     next(error);
   }

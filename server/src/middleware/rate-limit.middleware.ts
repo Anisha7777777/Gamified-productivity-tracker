@@ -4,6 +4,7 @@ import {
   getApiRateLimit,
   getAuthRateLimit,
   getPasswordResetRateLimit,
+  getVerificationResendRateLimit,
 } from "../config/env";
 
 const jsonLimitHandler = (_request: Request, response: Response) => {
@@ -31,6 +32,14 @@ export const authLimiter = rateLimit({
 export const passwordResetLimiter = rateLimit({
   windowMs: 15 * 60 * 1_000,
   limit: getPasswordResetRateLimit(),
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  handler: jsonLimitHandler,
+});
+
+export const verificationResendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1_000,
+  limit: getVerificationResendRateLimit(),
   standardHeaders: "draft-8",
   legacyHeaders: false,
   handler: jsonLimitHandler,

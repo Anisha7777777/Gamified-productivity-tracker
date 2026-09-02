@@ -55,3 +55,34 @@ export const sendPasswordResetEmail = async ({
     html: `<p>Use this link to reset your Questly password. It expires in 15 minutes:</p><p><a href="${resetUrl}">Reset password</a></p>`,
   });
 };
+
+export const sendEmailVerificationEmail = async ({
+  email,
+  verificationUrl,
+  expiresInHours,
+}: {
+  email: string;
+  verificationUrl: string;
+  expiresInHours: number;
+}) => {
+  const settings = readSmtpSettings();
+
+  if (!settings) {
+    throw new Error("Email delivery is not configured");
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: settings.host,
+    port: settings.port,
+    secure: settings.port === 465,
+    auth: { user: settings.user, pass: settings.password },
+  });
+
+  await transporter.sendMail({
+    from: settings.from,
+    to: email,
+    subject: "Verify your Questly email",
+    text: `Verify your Questly email address. This link expires in ${expiresInHours} hours: ${verificationUrl}`,
+    html: `<p>Verify your Questly email address. This link expires in ${expiresInHours} hours:</p><p><a href="${verificationUrl}">Verify email</a></p>`,
+  });
+};

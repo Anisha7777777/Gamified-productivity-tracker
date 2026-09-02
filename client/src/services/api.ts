@@ -5,6 +5,7 @@ export type User = {
   id: string;
   name: string;
   email: string;
+  emailVerified: boolean;
 };
 
 export type AuthResponse = {
@@ -147,6 +148,19 @@ export const resetPassword = (input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+
+export const verifyEmail = (token: string) =>
+  request<AuthResponse>("/api/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+
+export const resendVerification = () =>
+  request<{ message: string; user: User }>(
+    "/api/auth/resend-verification",
+    { method: "POST" },
+    true
+  );
 
 export const getTasks = () => request<Task[]>("/api/tasks", undefined, true);
 
