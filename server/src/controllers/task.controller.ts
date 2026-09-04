@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { Task } from "../models/task.model";
 import type { PlayerDocument } from "../models/player.model";
 import {
+  adjustPlayerXp,
   applyCompletionToPlayer,
   getOrCreatePlayer,
   toPlayerResponse,
@@ -250,6 +251,10 @@ export const updateTask = async (
             });
           }
         } else {
+          if (existingTask.completed && isDifficulty(updates.difficulty)) {
+            updates.awardedXp = updates.xpReward;
+          }
+
           updatedTask = await Task.findOneAndUpdate(
             { _id: id, user: userId },
             updates,
@@ -259,6 +264,14 @@ export const updateTask = async (
               session,
             }
           );
+
+          if (updatedTask && existingTask.completed) {
+            updatedPlayer = await adjustPlayerXp({
+              userId,
+              amount: updatedTask.xpReward - existingTask.xpReward,
+              session,
+            });
+          }
         }
 
         // A concurrent request may already have performed the same transition.

@@ -6,6 +6,7 @@
 **/build/
 **/coverage/
 **/.vite/
+**/.mongodb-binaries/
 *.tsbuildinfo
 
 # Environment files and secrets
@@ -28,4 +29,3 @@ pnpm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
-

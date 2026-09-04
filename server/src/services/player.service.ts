@@ -98,6 +98,23 @@ export const applyCompletionToPlayer = async ({
   return player;
 };
 
+// A completed task already contributed its stored reward. If its difficulty is
+// edited, keep the player's total aligned without changing completion counts.
+export const adjustPlayerXp = async ({
+  userId,
+  amount,
+  session,
+}: {
+  userId: string;
+  amount: number;
+  session: mongoose.ClientSession;
+}) => {
+  const player = await getOrCreatePlayer(userId, session);
+  player.totalXp = Math.max(0, player.totalXp + amount);
+  await player.save({ session });
+  return player;
+};
+
 export const toPlayerResponse = (player: PlayerDocument) => ({
   ...player.toObject(),
   level: Math.floor(player.totalXp / XP_PER_LEVEL) + 1,
