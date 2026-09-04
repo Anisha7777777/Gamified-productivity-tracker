@@ -8,6 +8,13 @@ import {
   getOrCreatePlayer,
   toPlayerResponse,
 } from "../services/player.service";
+import {
+  getNextRecurringDueDate,
+  isCalendarDate,
+  isRecurrence,
+  isReminderTime,
+  type Recurrence,
+} from "../services/task-planning.service";
 
 const xpByDifficulty = {
   easy: 10,
@@ -29,32 +36,30 @@ const allowedFields = new Set([
   "description",
   "category",
   "dueDate",
+  "recurrence",
+  "reminderTime",
   "completed",
   "difficulty",
 ]);
 
-const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/;
-
-const isCalendarDate = (value: string) => {
-  if (!dateOnlyPattern.test(value)) {
-    return false;
+const validatePlanningCombination = ({
+  dueDate,
+  recurrence,
+  reminderTime,
+}: {
+  dueDate: string | null;
+  recurrence: Recurrence;
+  reminderTime: string | null;
+}) => {
+  if (recurrence !== "none" && !dueDate) {
+    return "A recurring task needs a due date";
   }
 
-  const parts = value.split("-").map(Number);
-  const year = parts[0];
-  const month = parts[1];
-  const day = parts[2];
-
-  if (year === undefined || month === undefined || day === undefined) {
-    return false;
+  if (reminderTime && !dueDate) {
+    return "A reminder needs a due date";
   }
-  const date = new Date(Date.UTC(year, month - 1, day));
 
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  );
+  return null;
 };
 
 const validateTaskBody = (
@@ -69,7 +74,7 @@ const validateTaskBody = (
   const fields = Object.keys(values);
 
   if (fields.some((field) => !allowedFields.has(field))) {
-    return "Only title, description, category, dueDate, completed, and difficulty can be changed";
+    return "Only title, description, category, dueDate, recurrence, reminderTime, completed, and difficulty can be changed";
   }
 
   if (options.requireTitle && !("title" in values)) {
@@ -110,6 +115,29 @@ const validateTaskBody = (
     (typeof values.dueDate !== "string" || !isCalendarDate(values.dueDate))
   ) {
     return "Due date must be a real calendar date in YYYY-MM-DD format";
+  }
+
+  if ("recurrence" in values && !isRecurrence(values.recurrence)) {
+    return "Recurrence must be none, daily, weekly, or monthly";
+  }
+
+  if (
+    "reminderTime" in values &&
+    values.reminderTime !== null &&
+    (typeof values.reminderTime !== "string" || !isReminderTime(values.reminderTime))
+  ) {
+    return "Reminder time must use 24-hour HH:mm format";
+  }
+
+  if (options.requireTitle) {
+    const planningError = validatePlanningCombination({
+      dueDate: typeof values.dueDate === "string" ? values.dueDate : null,
+      recurrence: isRecurrence(values.recurrence) ? values.recurrence : "none",
+      reminderTime:
+        typeof values.reminderTime === "string" ? values.reminderTime : null,
+    });
+
+    if (planningError) return planningError;
   }
 
   if ("completed" in values && typeof values.completed !== "boolean") {
@@ -194,11 +222,20 @@ export const createTask = async (
       typeof requestBody.category === "string"
         ? requestBody.category.trim()
         : null;
+    const recurrence = isRecurrence(requestBody.recurrence)
+      ? requestBody.recurrence
+      : "none";
+    const reminderTime =
+      typeof requestBody.reminderTime === "string"
+        ? requestBody.reminderTime
+        : null;
 
     const task = await Task.create({
       ...requestBody,
       user: userId,
       category,
+      recurrence,
+      reminderTime,
       difficulty,
       xpReward: xpByDifficulty[difficulty],
     });
@@ -303,7 +340,9 @@ export const updateTask = async (
     const session = await mongoose.startSession();
     let updatedTask;
     let updatedPlayer: PlayerDocument | undefined;
+    let recurringTask: unknown = null;
     let taskWasFound = true;
+    let planningValidationError: string | null = null;
 
     try {
       await session.withTransaction(async () => {
@@ -315,6 +354,31 @@ export const updateTask = async (
           taskWasFound = false;
           return;
         }
+
+        const effectiveDueDate =
+          typeof updates.dueDate === "string"
+            ? updates.dueDate
+            : updates.dueDate === null
+              ? null
+              : existingTask.dueDate ?? null;
+        const effectiveRecurrence = isRecurrence(updates.recurrence)
+          ? updates.recurrence
+          : isRecurrence(existingTask.recurrence)
+            ? existingTask.recurrence
+            : "none";
+        const effectiveReminderTime =
+          typeof updates.reminderTime === "string"
+            ? updates.reminderTime
+            : updates.reminderTime === null
+              ? null
+              : existingTask.reminderTime ?? null;
+        planningValidationError = validatePlanningCombination({
+          dueDate: effectiveDueDate,
+          recurrence: effectiveRecurrence,
+          reminderTime: effectiveReminderTime,
+        });
+
+        if (planningValidationError) return;
 
         const completionWasRequested = typeof updates.completed === "boolean";
         const targetCompleted = completionWasRequested
@@ -345,6 +409,27 @@ export const updateTask = async (
               xpReward: xpForTransition,
               session,
             });
+
+            if (targetCompleted && effectiveRecurrence !== "none" && effectiveDueDate) {
+              const successor = new Task({
+                user: userId,
+                title: updatedTask.title,
+                description: updatedTask.description,
+                category: updatedTask.category ?? null,
+                dueDate: getNextRecurringDueDate(
+                  effectiveDueDate,
+                  effectiveRecurrence
+                ),
+                recurrence: effectiveRecurrence,
+                reminderTime: effectiveReminderTime,
+                completed: false,
+                difficulty: updatedTask.difficulty,
+                xpReward: xpByDifficulty[updatedTask.difficulty as Difficulty],
+                awardedXp: 0,
+              });
+              await successor.save({ session });
+              recurringTask = successor;
+            }
           }
         } else {
           if (existingTask.completed && isDifficulty(updates.difficulty)) {
@@ -367,6 +452,7 @@ export const updateTask = async (
               amount: updatedTask.xpReward - existingTask.xpReward,
               session,
             });
+
           }
         }
 
@@ -386,6 +472,11 @@ export const updateTask = async (
       await session.endSession();
     }
 
+    if (planningValidationError) {
+      res.status(400).json({ message: planningValidationError });
+      return;
+    }
+
     if (!taskWasFound || !updatedTask || !updatedPlayer) {
       res.status(404).json({ message: "Task not found" });
       return;
@@ -394,6 +485,7 @@ export const updateTask = async (
     res.json({
       task: updatedTask,
       player: toPlayerResponse(updatedPlayer),
+      recurringTask,
     });
   } catch (error) {
     next(error);

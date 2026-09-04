@@ -6,6 +6,7 @@ export type User = {
   name: string;
   email: string;
   emailVerified: boolean;
+  timezone: string;
 };
 
 export type AuthResponse = {
@@ -18,6 +19,8 @@ export type Task = {
   description: string;
   category: string | null;
   dueDate: string | null;
+  recurrence: "none" | "daily" | "weekly" | "monthly";
+  reminderTime: string | null;
   completed: boolean;
   difficulty: "easy" | "medium" | "hard";
   xpReward: number;
@@ -30,6 +33,8 @@ export type TaskInput = {
   description?: string;
   category?: string | null;
   dueDate?: string | null;
+  recurrence?: Task["recurrence"];
+  reminderTime?: string | null;
   completed?: boolean;
   difficulty?: Task["difficulty"];
 };
@@ -49,6 +54,7 @@ export type Player = {
 export type TaskUpdateResponse = {
   task: Task;
   player: Player;
+  recurringTask: Task | null;
 };
 
 const request = async <T>(
@@ -119,7 +125,11 @@ export const getCurrentUser = () =>
 export const logoutUser = () =>
   request<{ message: string }>("/api/auth/logout", { method: "POST" });
 
-export const updateAccount = (input: { name: string; email: string }) =>
+export const updateAccount = (input: {
+  name: string;
+  email: string;
+  timezone: string;
+}) =>
   request<{ user: User }>(
     "/api/auth/me",
     { method: "PATCH", body: JSON.stringify(input) },

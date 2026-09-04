@@ -43,6 +43,15 @@ const difficultyLabel = (difficulty: Difficulty) =>
 
 type StatusFilter = "all" | "active" | "completed";
 type DueDateFilter = "all" | "overdue" | "today" | "upcoming" | "none";
+type Recurrence = Task["recurrence"];
+type ViewMode = "list" | "calendar";
+
+const recurrenceOptions: Array<{ value: Recurrence; label: string }> = [
+  { value: "none", label: "None" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+];
 
 const getLocalDate = () => {
   const now = new Date();
@@ -52,10 +61,12 @@ const getLocalDate = () => {
   return `${year}-${month}-${day}`;
 };
 
-const getDueState = (task: Task): "overdue" | "today" | "upcoming" | null => {
+const getDueState = (
+  task: Task,
+  today = getLocalDate()
+): "overdue" | "today" | "upcoming" | null => {
   if (task.completed || !task.dueDate) return null;
 
-  const today = getLocalDate();
   if (task.dueDate < today) return "overdue";
   if (task.dueDate === today) return "today";
   return "upcoming";
@@ -65,6 +76,55 @@ const dueLabel = (dueDate: string) =>
   new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(
     new Date(`${dueDate}T00:00:00`)
   );
+
+const getTimeZoneNow = (timeZone: string, date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+
+  return {
+    date: `${value("year")}-${value("month")}-${value("day")}`,
+    time: `${value("hour")}:${value("minute")}`,
+  };
+};
+
+const dateForCalendar = (year: number, month: number, day: number) =>
+  `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+function RecurrenceSelect({
+  id,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  id: string;
+  value: Recurrence;
+  onChange: (recurrence: Recurrence) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      id={id}
+      value={value}
+      onChange={(event) => onChange(event.target.value as Recurrence)}
+      disabled={disabled}
+    >
+      {recurrenceOptions.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function DifficultySelect({
   id,
@@ -345,12 +405,16 @@ function App() {
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [recurrence, setRecurrence] = useState<Recurrence>("none");
+  const [reminderTime, setReminderTime] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editCategory, setEditCategory] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
+  const [editRecurrence, setEditRecurrence] = useState<Recurrence>("none");
+  const [editReminderTime, setEditReminderTime] = useState("");
   const [editDifficulty, setEditDifficulty] =
     useState<Difficulty>("medium");
   const [loading, setLoading] = useState(false);
@@ -366,6 +430,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsName, setSettingsName] = useState("");
   const [settingsEmail, setSettingsEmail] = useState("");
+  const [settingsTimezone, setSettingsTimezone] = useState("UTC");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -379,22 +444,62 @@ function App() {
   const [difficultyFilter, setDifficultyFilter] = useState<"" | Difficulty>("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [dueDateFilter, setDueDateFilter] = useState<DueDateFilter>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
+  const [dismissedReminderIds, setDismissedReminderIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [reminderClock, setReminderClock] = useState(() => new Date());
+  const [calendarMonth, setCalendarMonth] = useState<{
+    year: number;
+    month: number;
+  } | null>(null);
 
+  const timeZoneNow = getTimeZoneNow(user?.timezone ?? "UTC", reminderClock);
+  const activeCalendarMonth = calendarMonth ?? {
+    year: Number(timeZoneNow.date.slice(0, 4)),
+    month: Number(timeZoneNow.date.slice(5, 7)),
+  };
   const filteredTasks = tasks.filter((task) => {
     if (dueDateFilter === "all") return true;
     if (dueDateFilter === "none") return !task.dueDate;
-    return getDueState(task) === dueDateFilter;
+    return getDueState(task, timeZoneNow.date) === dueDateFilter;
   });
-  const completedCount = filteredTasks.filter((task) => task.completed).length;
-  const completionPercent = filteredTasks.length
-    ? Math.round((completedCount / filteredTasks.length) * 100)
+  const visibleTasks = filteredTasks.filter(
+    (task) => !selectedCalendarDate || task.dueDate === selectedCalendarDate
+  );
+  const completedCount = visibleTasks.filter((task) => task.completed).length;
+  const completionPercent = visibleTasks.length
+    ? Math.round((completedCount / visibleTasks.length) * 100)
     : 0;
   const categories = [...new Set(allTasks.map((task) => task.category).filter((item): item is string => Boolean(item)))].sort();
   const hasActiveFilters =
     statusFilter !== "all" ||
     difficultyFilter !== "" ||
     categoryFilter !== "" ||
-    dueDateFilter !== "all";
+    dueDateFilter !== "all" ||
+    selectedCalendarDate !== null;
+  const dueReminders = allTasks.filter(
+    (task) =>
+      !task.completed &&
+      task.dueDate !== null &&
+      task.reminderTime !== null &&
+      (task.dueDate < timeZoneNow.date ||
+        (task.dueDate === timeZoneNow.date &&
+          task.reminderTime <= timeZoneNow.time)) &&
+      !dismissedReminderIds.has(task._id)
+  );
+  const calendarDaysInMonth = new Date(
+    Date.UTC(activeCalendarMonth.year, activeCalendarMonth.month, 0)
+  ).getUTCDate();
+  const calendarStartDay = new Date(
+    Date.UTC(activeCalendarMonth.year, activeCalendarMonth.month - 1, 1)
+  ).getUTCDay();
+  const calendarMonthLabel = new Intl.DateTimeFormat("en", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(activeCalendarMonth.year, activeCalendarMonth.month - 1, 1)));
   const levelProgress = player
     ? Math.min(100, (player.currentLevelXp / player.xpForNextLevel) * 100)
     : 0;
@@ -403,6 +508,8 @@ function App() {
     month: "short",
     day: "numeric",
   }).format(new Date());
+  const browserTimeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
   useEffect(() => {
     const handleUnauthorized = (event: Event) => {
@@ -528,6 +635,11 @@ function App() {
   }, [xpNotice]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setReminderClock(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!levelUp) return;
 
     const timer = window.setTimeout(() => setLevelUp(null), 3200);
@@ -579,6 +691,20 @@ function App() {
     }
   };
 
+  const moveCalendarMonth = (offset: number) => {
+    const next = new Date(
+      Date.UTC(activeCalendarMonth.year, activeCalendarMonth.month - 1 + offset, 1)
+    );
+    setCalendarMonth({
+      year: next.getUTCFullYear(),
+      month: next.getUTCMonth() + 1,
+    });
+  };
+
+  const dismissReminder = (taskId: string) => {
+    setDismissedReminderIds((current) => new Set([...current, taskId]));
+  };
+
   const handleAuthenticated = (response: AuthResponse) => {
     setLoading(true);
     setUser(response.user);
@@ -613,6 +739,9 @@ function App() {
 
     setSettingsName(user.name);
     setSettingsEmail(user.email);
+    setSettingsTimezone(
+      user.timezone || browserTimeZone
+    );
     setCurrentPassword("");
     setNewPassword("");
     setConfirmPassword("");
@@ -631,10 +760,12 @@ function App() {
       const response = await updateAccount({
         name: settingsName,
         email: settingsEmail,
+        timezone: settingsTimezone,
       });
       setUser(response.user);
       setSettingsName(response.user.name);
       setSettingsEmail(response.user.email);
+      setSettingsTimezone(response.user.timezone);
       if (!response.user.emailVerified) {
         setShowSettings(false);
         setAuthMessage(
@@ -696,6 +827,8 @@ function App() {
         difficulty,
         ...(category.trim() ? { category: category.trim() } : {}),
         ...(dueDate ? { dueDate } : {}),
+        recurrence,
+        ...(reminderTime ? { reminderTime } : {}),
       });
       setAllTasks((current) => [task, ...current]);
       if (matchesServerFilters(task)) {
@@ -705,6 +838,8 @@ function App() {
       setDescription("");
       setCategory("");
       setDueDate("");
+      setRecurrence("none");
+      setReminderTime("");
       setDifficulty("medium");
     } catch (requestError) {
       showError(requestError);
@@ -740,6 +875,13 @@ function App() {
       replaceTask(result.task);
       setPlayer(result.player);
 
+      if (result.recurringTask) {
+        setAllTasks((current) => [result.recurringTask!, ...current]);
+        if (matchesServerFilters(result.recurringTask)) {
+          setTasks((current) => [result.recurringTask!, ...current]);
+        }
+      }
+
       if (previousPlayer) {
         const xpDifference = result.player.totalXp - previousPlayer.totalXp;
 
@@ -772,6 +914,8 @@ function App() {
     setEditDescription(task.description);
     setEditCategory(task.category ?? "");
     setEditDueDate(task.dueDate ?? "");
+    setEditRecurrence(task.recurrence);
+    setEditReminderTime(task.reminderTime ?? "");
     setEditDifficulty(task.difficulty);
   };
 
@@ -788,6 +932,8 @@ function App() {
         description: editDescription,
         category: editCategory.trim() || null,
         dueDate: editDueDate || null,
+        recurrence: editRecurrence,
+        reminderTime: editReminderTime || null,
         difficulty: editDifficulty,
       });
       replaceTask(result.task);
@@ -992,7 +1138,16 @@ function App() {
                   <input id="new-due-date" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)}
                     disabled={saving} />
                 </label>
+                <label htmlFor="new-recurrence">
+                  <span>Repeat</span>
+                  <RecurrenceSelect id="new-recurrence" value={recurrence} onChange={setRecurrence} disabled={saving} />
+                </label>
+                <label htmlFor="new-reminder-time">
+                  <span>Reminder <em>optional</em></span>
+                  <input id="new-reminder-time" type="time" value={reminderTime} onChange={(event) => setReminderTime(event.target.value)} disabled={saving} />
+                </label>
               </div>
+              <p className="planning-help">Repeating quests and reminders need a due date.</p>
               <button className="primary-button" type="submit" disabled={saving || loading}>
                 <span>{saving ? "Saving…" : "Begin quest"}</span><b>→</b>
               </button>
@@ -1006,10 +1161,65 @@ function App() {
           )}
           {error && <p className="error-banner" role="alert"><span>!</span>{error}</p>}
 
+          <section className="reminder-panel" aria-labelledby="reminder-title">
+            <div className="reminder-heading">
+              <div><p>GENTLE NUDGES</p><h2 id="reminder-title">Due reminders</h2></div>
+              <span>{user.timezone}</span>
+            </div>
+            {dueReminders.length === 0 ? (
+              <p className="reminder-empty">No reminders are due right now.</p>
+            ) : (
+              <ul className="reminder-list">
+                {dueReminders.map((task) => (
+                  <li key={task._id} className={task.dueDate! < timeZoneNow.date ? "overdue" : "today"}>
+                    <div><strong>{task.title}</strong><span>{task.dueDate! < timeZoneNow.date ? "Overdue" : `Today at ${task.reminderTime}`}</span></div>
+                    <button type="button" onClick={() => dismissReminder(task._id)} aria-label={`Dismiss reminder for ${task.title}`}>Dismiss</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <div className="view-toggle" role="group" aria-label="Planning view">
+            <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>List view</button>
+            <button type="button" className={viewMode === "calendar" ? "active" : ""} onClick={() => setViewMode("calendar")}>Calendar view</button>
+          </div>
+
+          {viewMode === "calendar" && (
+            <section className="calendar-panel" aria-labelledby="calendar-title">
+              <header className="calendar-header">
+                <button type="button" onClick={() => moveCalendarMonth(-1)} aria-label="Previous month">←</button>
+                <h2 id="calendar-title">{calendarMonthLabel}</h2>
+                <button type="button" onClick={() => moveCalendarMonth(1)} aria-label="Next month">→</button>
+              </header>
+              <div className="calendar-weekdays" aria-hidden="true">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <span key={day}>{day}</span>)}
+              </div>
+              <div className="calendar-grid">
+                {Array.from({ length: calendarStartDay }).map((_, index) => <div className="calendar-blank" key={`blank-${index}`} />)}
+                {Array.from({ length: calendarDaysInMonth }, (_, index) => {
+                  const day = index + 1;
+                  const date = dateForCalendar(activeCalendarMonth.year, activeCalendarMonth.month, day);
+                  const dayTasks = allTasks.filter((task) => task.dueDate === date);
+                  const hasOverdueTask = dayTasks.some((task) => getDueState(task, timeZoneNow.date) === "overdue");
+                  const isToday = date === timeZoneNow.date;
+                  return (
+                    <button key={date} type="button" className={`calendar-day ${selectedCalendarDate === date ? "selected" : ""} ${isToday ? "today" : ""} ${hasOverdueTask ? "overdue" : ""}`} onClick={() => setSelectedCalendarDate(date)} aria-pressed={selectedCalendarDate === date}>
+                      <strong>{day}</strong>
+                      {dayTasks.slice(0, 2).map((task) => <span key={task._id} className={`${task.completed ? "completed" : ""} ${task.recurrence !== "none" ? "recurring" : ""}`}>{task.title}</span>)}
+                      {dayTasks.length > 2 && <small>+{dayTasks.length - 2} more</small>}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedCalendarDate && <button type="button" className="clear-day-filter" onClick={() => setSelectedCalendarDate(null)}>Clear selected day</button>}
+            </section>
+          )}
+
           <section className="quest-list-section" aria-labelledby="quest-list-title">
             <div className="section-heading">
               <div><p>QUEST LOG</p><h2 id="quest-list-title">Your path today</h2></div>
-              <span>{completedCount} of {filteredTasks.length} complete</span>
+              <span>{completedCount} of {visibleTasks.length} complete</span>
             </div>
 
             <fieldset className="task-filters">
@@ -1039,15 +1249,15 @@ function App() {
 
             {loading ? (
               <div className="empty-state"><span>⌛</span><h3>Opening your quest log…</h3><p>Loading tasks and player progress.</p></div>
-            ) : filteredTasks.length === 0 ? (
+            ) : visibleTasks.length === 0 ? (
               <div className="empty-state">
                 <span>{hasActiveFilters ? "🔎" : "🗺️"}</span><h3>{hasActiveFilters ? "No quests match these filters" : "Your map is wide open"}</h3><p>{hasActiveFilters ? "Try changing or clearing a filter." : "Add a quest above to begin today’s adventure."}</p>
               </div>
             ) : (
               <ul className="quest-list">
-                {filteredTasks.map((task, index) => {
+                {visibleTasks.map((task, index) => {
                   const taskIsBusy = busyTaskId === task._id;
-                  const taskDueState = getDueState(task);
+                  const taskDueState = getDueState(task, timeZoneNow.date);
 
                   return (
                     <li key={task._id} className={`quest-item tone-${index % 5} ${task.completed ? "is-complete" : ""} ${taskDueState ? `due-${taskDueState}` : ""}`}>
@@ -1067,6 +1277,10 @@ function App() {
                             maxLength={30} disabled={taskIsBusy} /></label>
                           <label htmlFor={"edit-due-date-" + task._id}><span>Due date <em>optional</em></span><input id={"edit-due-date-" + task._id}
                             type="date" value={editDueDate} onChange={(event) => setEditDueDate(event.target.value)} disabled={taskIsBusy} /></label>
+                          <label htmlFor={"edit-recurrence-" + task._id}><span>Repeat</span>
+                            <RecurrenceSelect id={"edit-recurrence-" + task._id} value={editRecurrence} onChange={setEditRecurrence} disabled={taskIsBusy} /></label>
+                          <label htmlFor={"edit-reminder-time-" + task._id}><span>Reminder <em>optional</em></span><input id={"edit-reminder-time-" + task._id}
+                            type="time" value={editReminderTime} onChange={(event) => setEditReminderTime(event.target.value)} disabled={taskIsBusy} /></label>
                           <div className="edit-actions">
                             <button type="submit" disabled={taskIsBusy}>{taskIsBusy ? "Saving…" : "Save changes"}</button>
                             <button type="button" disabled={taskIsBusy} onClick={() => setEditingId(null)}>Cancel</button>
@@ -1085,6 +1299,8 @@ function App() {
                               <span className={`difficulty-badge ${task.difficulty}`}>{difficultyLabel(task.difficulty)}</span>
                               <span className="xp-reward">+{task.xpReward} XP</span>
                               {task.category && <span className="category-badge">{task.category}</span>}
+                              {task.recurrence !== "none" && <span className="recurrence-badge">↻ {task.recurrence}</span>}
+                              {task.reminderTime && <span className="reminder-badge">◷ {task.reminderTime}</span>}
                               {task.dueDate && <span className={`due-badge ${taskDueState ?? "completed"}`}>
                                 {taskDueState === "overdue" ? "Overdue" : taskDueState === "today" ? "Due today" : taskDueState === "upcoming" ? `Due ${dueLabel(task.dueDate)}` : `Due ${dueLabel(task.dueDate)}`}
                               </span>}
@@ -1166,6 +1382,17 @@ function App() {
                   type="email"
                   value={settingsEmail}
                   onChange={(event) => setSettingsEmail(event.target.value)}
+                  required
+                  disabled={settingsBusy}
+                />
+              </label>
+              <label htmlFor="settings-timezone">
+                <span>Timezone <em>browser suggests {browserTimeZone}</em></span>
+                <input
+                  id="settings-timezone"
+                  value={settingsTimezone}
+                  onChange={(event) => setSettingsTimezone(event.target.value)}
+                  placeholder={browserTimeZone}
                   required
                   disabled={settingsBusy}
                 />

@@ -35,6 +35,17 @@ const PASSWORD_RESET_RESPONSE = {
     "If an account uses that email, a password-reset link will be sent shortly.",
 };
 
+const isSupportedTimeZone = (value: unknown): value is string => {
+  if (typeof value !== "string" || !value.trim()) return false;
+
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const validateCredentials = (
   body: unknown,
   options: { requireName?: boolean } = {}
@@ -78,11 +89,13 @@ const safeUser = (user: {
   name: string;
   email: string;
   emailVerified?: boolean;
+  timezone?: string;
 }) => ({
   id: String(user._id),
   name: user.name,
   email: user.email,
   emailVerified: user.emailVerified === true,
+  timezone: user.timezone ?? "UTC",
 });
 
 const readRequestToken = (req: Request) => {
@@ -348,9 +361,11 @@ export const updateAccount = async (
 
   if (
     fields.length === 0 ||
-    fields.some((field) => field !== "name" && field !== "email")
+    fields.some(
+      (field) => field !== "name" && field !== "email" && field !== "timezone"
+    )
   ) {
-    res.status(400).json({ message: "Only name and email can be changed" });
+    res.status(400).json({ message: "Only name, email, and timezone can be changed" });
     return;
   }
 
@@ -375,6 +390,13 @@ export const updateAccount = async (
     return;
   }
 
+  if ("timezone" in values && !isSupportedTimeZone(values.timezone)) {
+    res.status(400).json({
+      message: "Enter a valid IANA timezone, such as Asia/Kolkata",
+    });
+    return;
+  }
+
   try {
     const user = await User.findById(req.userId);
 
@@ -390,6 +412,10 @@ export const updateAccount = async (
         ? values.email.trim().toLowerCase()
         : user.email;
     const emailChanged = nextEmail !== user.email;
+    const nextTimezone =
+      typeof values.timezone === "string"
+        ? values.timezone
+        : user.timezone ?? "UTC";
 
     if (emailChanged && !isEmailDeliveryConfigured()) {
       emailServiceUnavailable(res);
@@ -414,6 +440,7 @@ export const updateAccount = async (
     const wasEmailVerified = user.emailVerified === true;
     user.name = nextName;
     user.email = nextEmail;
+    user.timezone = nextTimezone;
 
     if (emailChanged) {
       user.emailVerified = false;

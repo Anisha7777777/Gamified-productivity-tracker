@@ -31,6 +31,16 @@ const taskSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    recurrence: {
+      type: String,
+      enum: ["none", "daily", "weekly", "monthly"],
+      default: "none",
+    },
+    reminderTime: {
+      // A local wall-clock time such as 09:00; the user timezone supplies context.
+      type: String,
+      default: null,
+    },
     completed: {
       type: Boolean,
       default: false,

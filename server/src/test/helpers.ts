@@ -60,6 +60,8 @@ export const createTestTask = async (
     difficulty?: "easy" | "medium" | "hard";
     category?: string;
     dueDate?: string;
+    recurrence?: "none" | "daily" | "weekly" | "monthly";
+    reminderTime?: string;
   } = {}
 ) => {
   const response = await agent.post("/api/tasks").send({
@@ -67,6 +69,8 @@ export const createTestTask = async (
     difficulty: input.difficulty ?? "medium",
     ...(input.category !== undefined ? { category: input.category } : {}),
     ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
+    ...(input.recurrence !== undefined ? { recurrence: input.recurrence } : {}),
+    ...(input.reminderTime !== undefined ? { reminderTime: input.reminderTime } : {}),
   });
 
   if (response.status !== 201) {
@@ -78,6 +82,8 @@ export const createTestTask = async (
     xpReward: number;
     category: string | null;
     dueDate: string | null;
+    recurrence: "none" | "daily" | "weekly" | "monthly";
+    reminderTime: string | null;
   };
 };
 

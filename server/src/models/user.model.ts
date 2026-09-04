@@ -10,6 +10,7 @@ export type UserFields = {
   emailVerified: boolean;
   emailVerificationTokenHash?: string;
   emailVerificationExpiresAt?: Date;
+  timezone: string;
 };
 
 const userSchema = new mongoose.Schema<UserFields>(
@@ -58,6 +59,10 @@ const userSchema = new mongoose.Schema<UserFields>(
     emailVerificationExpiresAt: {
       type: Date,
       select: false,
+    },
+    timezone: {
+      type: String,
+      default: "UTC",
     },
   },
   {

@@ -2,6 +2,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../../app";
 import { Player } from "../../models/player.model";
+import { Task } from "../../models/task.model";
 import { User } from "../../models/user.model";
 import * as playerService from "../../services/player.service";
 import {
@@ -29,6 +30,7 @@ describe("registration and authentication", () => {
       name: credentials.name,
       email: credentials.email,
       emailVerified: false,
+      timezone: "UTC",
     });
     expect(JSON.stringify(response.body)).not.toMatch(/password|token/i);
 
@@ -366,6 +368,172 @@ describe("task planning fields and filters", () => {
     expect(userBPrivateFilter.body).toEqual([]);
     expect(userBWorkFilter.body).toHaveLength(1);
     expect(userBWorkFilter.body[0].category).toBe("Work");
+  });
+});
+
+describe("recurring task planning", () => {
+  it("stores a valid IANA timezone and rejects unsupported timezone values", async () => {
+    const user = await registerVerifiedTestUser();
+
+    const valid = await user.agent.patch("/api/auth/me").send({
+      name: user.credentials.name,
+      email: user.credentials.email,
+      timezone: "Asia/Kolkata",
+    });
+    const invalid = await user.agent.patch("/api/auth/me").send({
+      timezone: "Moon/Base-One",
+    });
+
+    expect(valid.status).toBe(200);
+    expect(valid.body.user.timezone).toBe("Asia/Kolkata");
+    expect(invalid.status).toBe(400);
+  });
+
+  it("validates reminder times and requires a due date for reminders and recurrence", async () => {
+    const user = await registerVerifiedTestUser();
+
+    const valid = await createTestTask(user.agent, {
+      dueDate: "2026-09-04",
+      reminderTime: "18:30",
+      recurrence: "daily",
+    });
+    expect(valid).toMatchObject({
+      dueDate: "2026-09-04",
+      reminderTime: "18:30",
+      recurrence: "daily",
+    });
+    expect(
+      (await user.agent.patch(`/api/tasks/${valid._id}`).send({ dueDate: null }))
+        .status
+    ).toBe(400);
+
+    for (const body of [
+      { title: "No due date", recurrence: "daily" },
+      { title: "No due date reminder", reminderTime: "09:00" },
+      { title: "Invalid time", dueDate: "2026-09-04", reminderTime: "25:00" },
+      { title: "Invalid repeat", dueDate: "2026-09-04", recurrence: "yearly" },
+    ]) {
+      expect((await user.agent.post("/api/tasks").send(body)).status).toBe(400);
+    }
+  });
+
+  it("creates daily and weekly successors inside completion transactions", async () => {
+    const user = await registerVerifiedTestUser();
+    const daily = await createTestTask(user.agent, {
+      title: "Daily planning",
+      dueDate: "2026-09-04",
+      recurrence: "daily",
+      reminderTime: "09:00",
+    });
+    const weekly = await createTestTask(user.agent, {
+      title: "Weekly planning",
+      dueDate: "2026-09-04",
+      recurrence: "weekly",
+    });
+
+    const dailyCompletion = await user.agent
+      .patch(`/api/tasks/${daily._id}`)
+      .send({ completed: true });
+    const weeklyCompletion = await user.agent
+      .patch(`/api/tasks/${weekly._id}`)
+      .send({ completed: true });
+
+    expect(dailyCompletion.body.recurringTask).toMatchObject({
+      title: "Daily planning",
+      dueDate: "2026-09-05",
+      completed: false,
+      recurrence: "daily",
+      reminderTime: "09:00",
+    });
+    expect(weeklyCompletion.body.recurringTask).toMatchObject({
+      title: "Weekly planning",
+      dueDate: "2026-09-11",
+      completed: false,
+      recurrence: "weekly",
+    });
+  });
+
+  it("clamps monthly successors to the final day of shorter months", async () => {
+    const user = await registerVerifiedTestUser();
+    const task = await createTestTask(user.agent, {
+      title: "Month-end review",
+      dueDate: "2026-01-31",
+      recurrence: "monthly",
+    });
+
+    const completion = await user.agent
+      .patch(`/api/tasks/${task._id}`)
+      .send({ completed: true });
+
+    expect(completion.status).toBe(200);
+    expect(completion.body.recurringTask).toMatchObject({
+      dueDate: "2026-02-28",
+      recurrence: "monthly",
+    });
+  });
+
+  it("creates one recurring successor and awards XP once for simultaneous completion", async () => {
+    const user = await registerVerifiedTestUser();
+    const task = await createTestTask(user.agent, {
+      difficulty: "easy",
+      dueDate: "2026-09-04",
+      recurrence: "daily",
+    });
+
+    await Promise.all([
+      user.agent.patch(`/api/tasks/${task._id}`).send({ completed: true }),
+      user.agent.patch(`/api/tasks/${task._id}`).send({ completed: true }),
+    ]);
+
+    const tasks = await user.agent.get("/api/tasks");
+    const player = await getStoredPlayer(String((await getStoredUser(user.credentials.email))?._id));
+    expect(tasks.body).toHaveLength(2);
+    expect(tasks.body.filter((item: { title: string }) => item.title === "Integration task")).toHaveLength(2);
+    expect(player).toMatchObject({ totalXp: 10, completedTasks: 1 });
+
+    const reopen = await user.agent
+      .patch(`/api/tasks/${task._id}`)
+      .send({ completed: false });
+    expect(reopen.body.recurringTask).toBeNull();
+    expect((await user.agent.get("/api/tasks")).body).toHaveLength(2);
+  });
+
+  it("keeps recurring tasks private and does not create successors for one-time tasks", async () => {
+    const userA = await registerVerifiedTestUser();
+    const userB = await registerVerifiedTestUser();
+    const recurringTask = await createTestTask(userA.agent, {
+      dueDate: "2026-09-04",
+      recurrence: "daily",
+    });
+    const oneTimeTask = await createTestTask(userA.agent, { title: "One-time quest" });
+
+    expect((await userA.agent.patch(`/api/tasks/${recurringTask._id}`).send({ completed: true })).body.recurringTask).not.toBeNull();
+    expect((await userA.agent.patch(`/api/tasks/${oneTimeTask._id}`).send({ completed: true })).body.recurringTask).toBeNull();
+    expect((await userB.agent.get("/api/tasks")).body).toEqual([]);
+    expect((await userB.agent.patch(`/api/tasks/${recurringTask._id}`).send({ completed: true })).status).toBe(404);
+  });
+
+  it("rolls back completion when creating a recurring successor fails", async () => {
+    const user = await registerVerifiedTestUser();
+    const task = await createTestTask(user.agent, {
+      difficulty: "easy",
+      dueDate: "2026-09-04",
+      recurrence: "daily",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(Task.prototype, "save").mockRejectedValueOnce(
+      new Error("Simulated recurring successor failure")
+    );
+
+    const response = await user.agent.patch(`/api/tasks/${task._id}`).send({ completed: true });
+    const storedTask = await getStoredTask(task._id);
+    const player = await getStoredPlayer(String((await getStoredUser(user.credentials.email))?._id));
+
+    expect(response.status).toBe(500);
+    expect(storedTask?.completed).toBe(false);
+    expect(player).toMatchObject({ totalXp: 0, completedTasks: 0 });
+    expect((await user.agent.get("/api/tasks")).body).toHaveLength(1);
+    errorSpy.mockRestore();
   });
 });
 
