@@ -41,6 +41,31 @@ const difficultyLabel = (difficulty: Difficulty) =>
   difficultyOptions.find((option) => option.value === difficulty)?.label ??
   difficulty;
 
+type StatusFilter = "all" | "active" | "completed";
+type DueDateFilter = "all" | "overdue" | "today" | "upcoming" | "none";
+
+const getLocalDate = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const getDueState = (task: Task): "overdue" | "today" | "upcoming" | null => {
+  if (task.completed || !task.dueDate) return null;
+
+  const today = getLocalDate();
+  if (task.dueDate < today) return "overdue";
+  if (task.dueDate === today) return "today";
+  return "upcoming";
+};
+
+const dueLabel = (dueDate: string) =>
+  new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(
+    new Date(`${dueDate}T00:00:00`)
+  );
+
 function DifficultySelect({
   id,
   value,
@@ -318,10 +343,14 @@ function App() {
   const [player, setPlayer] = useState<Player | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editDueDate, setEditDueDate] = useState("");
   const [editDifficulty, setEditDifficulty] =
     useState<Difficulty>("medium");
   const [loading, setLoading] = useState(false);
@@ -345,11 +374,27 @@ function App() {
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsError, setSettingsError] = useState("");
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [difficultyFilter, setDifficultyFilter] = useState<"" | Difficulty>("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [dueDateFilter, setDueDateFilter] = useState<DueDateFilter>("all");
 
-  const completedCount = tasks.filter((task) => task.completed).length;
-  const completionPercent = tasks.length
-    ? Math.round((completedCount / tasks.length) * 100)
+  const filteredTasks = tasks.filter((task) => {
+    if (dueDateFilter === "all") return true;
+    if (dueDateFilter === "none") return !task.dueDate;
+    return getDueState(task) === dueDateFilter;
+  });
+  const completedCount = filteredTasks.filter((task) => task.completed).length;
+  const completionPercent = filteredTasks.length
+    ? Math.round((completedCount / filteredTasks.length) * 100)
     : 0;
+  const categories = [...new Set(allTasks.map((task) => task.category).filter((item): item is string => Boolean(item)))].sort();
+  const hasActiveFilters =
+    statusFilter !== "all" ||
+    difficultyFilter !== "" ||
+    categoryFilter !== "" ||
+    dueDateFilter !== "all";
   const levelProgress = player
     ? Math.min(100, (player.currentLevelXp / player.xpForNextLevel) * 100)
     : 0;
@@ -364,6 +409,7 @@ function App() {
       const message = (event as CustomEvent<string>).detail;
       setUser(null);
       setTasks([]);
+      setAllTasks([]);
       setPlayer(null);
       setLoading(false);
       setAuthMessage(message);
@@ -453,12 +499,26 @@ function App() {
 
     Promise.all([getTasks(), getPlayer()])
       .then(([loadedTasks, loadedPlayer]) => {
-        setTasks(loadedTasks);
+        setAllTasks(loadedTasks);
         setPlayer(loadedPlayer);
       })
       .catch((requestError: Error) => setError(requestError.message))
-      .finally(() => setLoading(false));
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !user.emailVerified) {
+      return;
+    }
+
+    getTasks({
+      status: statusFilter,
+      ...(difficultyFilter ? { difficulty: difficultyFilter } : {}),
+      ...(categoryFilter ? { category: categoryFilter } : {}),
+    })
+      .then(setTasks)
+      .catch((requestError: Error) => setError(requestError.message))
+      .finally(() => setLoading(false));
+  }, [user, statusFilter, difficultyFilter, categoryFilter]);
 
   useEffect(() => {
     if (!xpNotice) return;
@@ -481,6 +541,44 @@ function App() {
         : "Something went wrong"
     );
 
+  const matchesServerFilters = (task: Task) =>
+    (statusFilter === "all" ||
+      (statusFilter === "active" && !task.completed) ||
+      (statusFilter === "completed" && task.completed)) &&
+    (!difficultyFilter || task.difficulty === difficultyFilter) &&
+    (!categoryFilter || task.category === categoryFilter);
+
+  const clearFilters = () => {
+    if (statusFilter !== "all" || difficultyFilter || categoryFilter) {
+      setLoading(true);
+    }
+    setStatusFilter("all");
+    setDifficultyFilter("");
+    setCategoryFilter("");
+    setDueDateFilter("all");
+  };
+
+  const changeStatusFilter = (value: StatusFilter) => {
+    if (value !== statusFilter) {
+      setLoading(true);
+      setStatusFilter(value);
+    }
+  };
+
+  const changeDifficultyFilter = (value: "" | Difficulty) => {
+    if (value !== difficultyFilter) {
+      setLoading(true);
+      setDifficultyFilter(value);
+    }
+  };
+
+  const changeCategoryFilter = (value: string) => {
+    if (value !== categoryFilter) {
+      setLoading(true);
+      setCategoryFilter(value);
+    }
+  };
+
   const handleAuthenticated = (response: AuthResponse) => {
     setLoading(true);
     setUser(response.user);
@@ -497,6 +595,7 @@ function App() {
       await logoutUser();
       setUser(null);
       setTasks([]);
+      setAllTasks([]);
       setPlayer(null);
       setLoading(false);
       setEditingId(null);
@@ -569,6 +668,7 @@ function App() {
       });
       setUser(null);
       setTasks([]);
+      setAllTasks([]);
       setPlayer(null);
       setEditingId(null);
       setShowSettings(false);
@@ -590,10 +690,21 @@ function App() {
     setSaving(true);
 
     try {
-      const task = await createTask({ title, description, difficulty });
-      setTasks((current) => [task, ...current]);
+      const task = await createTask({
+        title,
+        description,
+        difficulty,
+        ...(category.trim() ? { category: category.trim() } : {}),
+        ...(dueDate ? { dueDate } : {}),
+      });
+      setAllTasks((current) => [task, ...current]);
+      if (matchesServerFilters(task)) {
+        setTasks((current) => [task, ...current]);
+      }
       setTitle("");
       setDescription("");
+      setCategory("");
+      setDueDate("");
       setDifficulty("medium");
     } catch (requestError) {
       showError(requestError);
@@ -603,8 +714,13 @@ function App() {
   };
 
   const replaceTask = (updated: Task) => {
-    setTasks((current) =>
+    setAllTasks((current) =>
       current.map((item) => (item._id === updated._id ? updated : item))
+    );
+    setTasks((current) =>
+      matchesServerFilters(updated)
+        ? current.map((item) => (item._id === updated._id ? updated : item))
+        : current.filter((item) => item._id !== updated._id)
     );
   };
 
@@ -654,6 +770,8 @@ function App() {
     setEditingId(task._id);
     setEditTitle(task.title);
     setEditDescription(task.description);
+    setEditCategory(task.category ?? "");
+    setEditDueDate(task.dueDate ?? "");
     setEditDifficulty(task.difficulty);
   };
 
@@ -668,6 +786,8 @@ function App() {
       const result = await updateTask(id, {
         title: editTitle,
         description: editDescription,
+        category: editCategory.trim() || null,
+        dueDate: editDueDate || null,
         difficulty: editDifficulty,
       });
       replaceTask(result.task);
@@ -689,6 +809,7 @@ function App() {
     try {
       await deleteTask(id);
       setTasks((current) => current.filter((task) => task._id !== id));
+      setAllTasks((current) => current.filter((task) => task._id !== id));
     } catch (requestError) {
       showError(requestError);
     } finally {
@@ -861,6 +982,16 @@ function App() {
                   <span>Difficulty</span>
                   <DifficultySelect id="new-difficulty" value={difficulty} onChange={setDifficulty} disabled={saving} />
                 </label>
+                <label htmlFor="new-category">
+                  <span>Category <em>optional</em></span>
+                  <input id="new-category" value={category} onChange={(event) => setCategory(event.target.value)}
+                    placeholder="e.g. Work" maxLength={30} disabled={saving} />
+                </label>
+                <label htmlFor="new-due-date">
+                  <span>Due date <em>optional</em></span>
+                  <input id="new-due-date" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)}
+                    disabled={saving} />
+                </label>
               </div>
               <button className="primary-button" type="submit" disabled={saving || loading}>
                 <span>{saving ? "Saving…" : "Begin quest"}</span><b>→</b>
@@ -878,22 +1009,48 @@ function App() {
           <section className="quest-list-section" aria-labelledby="quest-list-title">
             <div className="section-heading">
               <div><p>QUEST LOG</p><h2 id="quest-list-title">Your path today</h2></div>
-              <span>{completedCount} of {tasks.length} complete</span>
+              <span>{completedCount} of {filteredTasks.length} complete</span>
             </div>
+
+            <fieldset className="task-filters">
+              <legend>Filter your quests</legend>
+              <label htmlFor="filter-status"><span>Status</span>
+                <select id="filter-status" value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as StatusFilter)}>
+                  <option value="all">All</option><option value="active">Active</option><option value="completed">Completed</option>
+                </select>
+              </label>
+              <label htmlFor="filter-difficulty"><span>Difficulty</span>
+                <select id="filter-difficulty" value={difficultyFilter} onChange={(event) => changeDifficultyFilter(event.target.value as "" | Difficulty)}>
+                  <option value="">All</option>{difficultyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label htmlFor="filter-category"><span>Category</span>
+                <select id="filter-category" value={categoryFilter} onChange={(event) => changeCategoryFilter(event.target.value)}>
+                  <option value="">All</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+              <label htmlFor="filter-due-date"><span>Due date</span>
+                <select id="filter-due-date" value={dueDateFilter} onChange={(event) => setDueDateFilter(event.target.value as DueDateFilter)}>
+                  <option value="all">All</option><option value="overdue">Overdue</option><option value="today">Today</option><option value="upcoming">Upcoming</option><option value="none">No due date</option>
+                </select>
+              </label>
+              {hasActiveFilters && <button type="button" className="clear-filters" onClick={clearFilters}>Clear filters</button>}
+            </fieldset>
 
             {loading ? (
               <div className="empty-state"><span>⌛</span><h3>Opening your quest log…</h3><p>Loading tasks and player progress.</p></div>
-            ) : tasks.length === 0 ? (
+            ) : filteredTasks.length === 0 ? (
               <div className="empty-state">
-                <span>🗺️</span><h3>Your map is wide open</h3><p>Add a quest above to begin today’s adventure.</p>
+                <span>{hasActiveFilters ? "🔎" : "🗺️"}</span><h3>{hasActiveFilters ? "No quests match these filters" : "Your map is wide open"}</h3><p>{hasActiveFilters ? "Try changing or clearing a filter." : "Add a quest above to begin today’s adventure."}</p>
               </div>
             ) : (
               <ul className="quest-list">
-                {tasks.map((task, index) => {
+                {filteredTasks.map((task, index) => {
                   const taskIsBusy = busyTaskId === task._id;
+                  const taskDueState = getDueState(task);
 
                   return (
-                    <li key={task._id} className={`quest-item tone-${index % 5} ${task.completed ? "is-complete" : ""}`}>
+                    <li key={task._id} className={`quest-item tone-${index % 5} ${task.completed ? "is-complete" : ""} ${taskDueState ? `due-${taskDueState}` : ""}`}>
                       {editingId === task._id ? (
                         <form className="edit-form" onSubmit={(event) => handleEdit(event, task._id)}>
                           <label htmlFor={`edit-title-${task._id}`}><span>Quest name</span><input id={`edit-title-${task._id}`}
@@ -905,6 +1062,11 @@ function App() {
                           <label htmlFor={`edit-difficulty-${task._id}`}><span>Difficulty</span>
                             <DifficultySelect id={`edit-difficulty-${task._id}`} value={editDifficulty}
                               onChange={setEditDifficulty} disabled={taskIsBusy} /></label>
+                          <label htmlFor={"edit-category-" + task._id}><span>Category <em>optional</em></span><input id={"edit-category-" + task._id}
+                            value={editCategory} onChange={(event) => setEditCategory(event.target.value)}
+                            maxLength={30} disabled={taskIsBusy} /></label>
+                          <label htmlFor={"edit-due-date-" + task._id}><span>Due date <em>optional</em></span><input id={"edit-due-date-" + task._id}
+                            type="date" value={editDueDate} onChange={(event) => setEditDueDate(event.target.value)} disabled={taskIsBusy} /></label>
                           <div className="edit-actions">
                             <button type="submit" disabled={taskIsBusy}>{taskIsBusy ? "Saving…" : "Save changes"}</button>
                             <button type="button" disabled={taskIsBusy} onClick={() => setEditingId(null)}>Cancel</button>
@@ -922,6 +1084,10 @@ function App() {
                             <div className="quest-meta">
                               <span className={`difficulty-badge ${task.difficulty}`}>{difficultyLabel(task.difficulty)}</span>
                               <span className="xp-reward">+{task.xpReward} XP</span>
+                              {task.category && <span className="category-badge">{task.category}</span>}
+                              {task.dueDate && <span className={`due-badge ${taskDueState ?? "completed"}`}>
+                                {taskDueState === "overdue" ? "Overdue" : taskDueState === "today" ? "Due today" : taskDueState === "upcoming" ? `Due ${dueLabel(task.dueDate)}` : `Due ${dueLabel(task.dueDate)}`}
+                              </span>}
                             </div>
                             {task.description && <p>{task.description}</p>}
                           </div>

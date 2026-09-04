@@ -163,13 +163,13 @@ describe("task ownership and progression", () => {
     expect((await userA.agent.get("/api/tasks")).body).toHaveLength(1);
     expect((await userB.agent.get("/api/tasks")).body).toHaveLength(0);
 
-    for (const attempt of [
-      userB.agent.get(`/api/tasks/${taskA._id}`),
-      userB.agent.patch(`/api/tasks/${taskA._id}`).send({ title: "Changed" }),
-      userB.agent.patch(`/api/tasks/${taskA._id}`).send({ completed: true }),
-      userB.agent.delete(`/api/tasks/${taskA._id}`),
+    for (const makeAttempt of [
+      () => userB.agent.get(`/api/tasks/${taskA._id}`),
+      () => userB.agent.patch(`/api/tasks/${taskA._id}`).send({ title: "Changed" }),
+      () => userB.agent.patch(`/api/tasks/${taskA._id}`).send({ completed: true }),
+      () => userB.agent.delete(`/api/tasks/${taskA._id}`),
     ]) {
-      expect((await attempt).status).toBe(404);
+      expect((await makeAttempt()).status).toBe(404);
     }
 
     const storedTask = await getStoredTask(taskA._id);
@@ -234,6 +234,138 @@ describe("task ownership and progression", () => {
     expect(storedTask?.completed).toBe(false);
     expect(player).toMatchObject({ totalXp: 0, completedTasks: 0 });
     errorSpy.mockRestore();
+  });
+});
+
+describe("task planning fields and filters", () => {
+  it("creates optional category and date-only due-date fields without changing XP behavior", async () => {
+    const user = await registerVerifiedTestUser();
+    const planned = await createTestTask(user.agent, {
+      title: "Plan the weekly review",
+      difficulty: "hard",
+      category: " Work ",
+      dueDate: "2026-09-04",
+    });
+    const unplanned = await createTestTask(user.agent, {
+      title: "An unplanned quest",
+    });
+
+    expect(planned).toMatchObject({
+      category: "Work",
+      dueDate: "2026-09-04",
+      xpReward: 50,
+    });
+    expect(unplanned).toMatchObject({ category: null, dueDate: null, xpReward: 25 });
+
+    const listed = await user.agent.get("/api/tasks");
+    const fetched = await user.agent.get(`/api/tasks/${planned._id}`);
+    expect(listed.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          _id: planned._id,
+          category: "Work",
+          dueDate: "2026-09-04",
+        }),
+      ])
+    );
+    expect(fetched.body).toMatchObject({
+      _id: planned._id,
+      category: "Work",
+      dueDate: "2026-09-04",
+    });
+
+    const completed = await user.agent
+      .patch(`/api/tasks/${planned._id}`)
+      .send({ completed: true });
+    expect(completed.body.player).toMatchObject({ totalXp: 50, completedTasks: 1 });
+  });
+
+  it("updates and clears category and due date, while rejecting invalid planning values", async () => {
+    const user = await registerVerifiedTestUser();
+    const task = await createTestTask(user.agent);
+
+    const updated = await user.agent.patch(`/api/tasks/${task._id}`).send({
+      category: "Home",
+      dueDate: "2026-12-31",
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.task).toMatchObject({ category: "Home", dueDate: "2026-12-31" });
+
+    const cleared = await user.agent.patch(`/api/tasks/${task._id}`).send({
+      category: null,
+      dueDate: null,
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.task).toMatchObject({ category: null, dueDate: null });
+
+    for (const body of [
+      { category: "   " },
+      { category: "x".repeat(31) },
+      { dueDate: "2026-02-30" },
+      { dueDate: "not-a-date" },
+      { xpReward: 999 },
+    ]) {
+      expect((await user.agent.patch(`/api/tasks/${task._id}`).send(body)).status).toBe(400);
+    }
+  });
+
+  it("combines user-scoped status, difficulty, and category filters", async () => {
+    const user = await registerVerifiedTestUser();
+    const activeHardWork = await createTestTask(user.agent, {
+      title: "Active hard work quest",
+      difficulty: "hard",
+      category: "Work",
+    });
+    const completedHardWork = await createTestTask(user.agent, {
+      title: "Completed hard work quest",
+      difficulty: "hard",
+      category: "Work",
+    });
+    await createTestTask(user.agent, {
+      title: "Easy home quest",
+      difficulty: "easy",
+      category: "Home",
+    });
+    await user.agent
+      .patch(`/api/tasks/${completedHardWork._id}`)
+      .send({ completed: true });
+
+    const activeHardWorkTasks = await user.agent.get(
+      "/api/tasks?status=active&difficulty=hard&category=Work"
+    );
+    const completedTasks = await user.agent.get("/api/tasks?status=completed");
+
+    expect(activeHardWorkTasks.status).toBe(200);
+    expect(activeHardWorkTasks.body).toHaveLength(1);
+    expect(activeHardWorkTasks.body[0]._id).toBe(activeHardWork._id);
+    expect(completedTasks.body).toHaveLength(1);
+    expect(completedTasks.body[0]._id).toBe(completedHardWork._id);
+    expect((await user.agent.get("/api/tasks?difficulty=legendary")).status).toBe(400);
+    expect((await user.agent.get("/api/tasks?category=%20%20")).status).toBe(400);
+  });
+
+  it("never exposes another user's filtered tasks or categories", async () => {
+    const userA = await registerVerifiedTestUser();
+    const userB = await registerVerifiedTestUser();
+    await createTestTask(userA.agent, {
+      title: "Private finance planning",
+      category: "Private Finance",
+      dueDate: "2026-09-04",
+    });
+    await createTestTask(userB.agent, {
+      title: "Public-looking task",
+      category: "Work",
+    });
+
+    const userBPrivateFilter = await userB.agent.get(
+      "/api/tasks?category=Private%20Finance"
+    );
+    const userBWorkFilter = await userB.agent.get("/api/tasks?category=Work");
+
+    expect(userBPrivateFilter.status).toBe(200);
+    expect(userBPrivateFilter.body).toEqual([]);
+    expect(userBWorkFilter.body).toHaveLength(1);
+    expect(userBWorkFilter.body[0].category).toBe("Work");
   });
 });
 

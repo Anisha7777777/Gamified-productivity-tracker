@@ -20,6 +20,17 @@ const taskSchema = new mongoose.Schema(
       maxlength: [500, "Description cannot be longer than 500 characters"],
       default: "",
     },
+    category: {
+      type: String,
+      trim: true,
+      maxlength: [30, "Category cannot be longer than 30 characters"],
+      default: null,
+    },
+    dueDate: {
+      // Calendar dates stay as YYYY-MM-DD strings to avoid timezone shifts.
+      type: String,
+      default: null,
+    },
     completed: {
       type: Boolean,
       default: false,

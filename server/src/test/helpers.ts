@@ -55,18 +55,30 @@ export const registerVerifiedTestUser = async () => {
 
 export const createTestTask = async (
   agent: ReturnType<typeof request.agent>,
-  input: { title?: string; difficulty?: "easy" | "medium" | "hard" } = {}
+  input: {
+    title?: string;
+    difficulty?: "easy" | "medium" | "hard";
+    category?: string;
+    dueDate?: string;
+  } = {}
 ) => {
   const response = await agent.post("/api/tasks").send({
     title: input.title ?? "Integration task",
     difficulty: input.difficulty ?? "medium",
+    ...(input.category !== undefined ? { category: input.category } : {}),
+    ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
   });
 
   if (response.status !== 201) {
     throw new Error("Could not create a test task");
   }
 
-  return response.body as { _id: string; xpReward: number };
+  return response.body as {
+    _id: string;
+    xpReward: number;
+    category: string | null;
+    dueDate: string | null;
+  };
 };
 
 export const getStoredUser = (email: string) => User.findOne({ email });

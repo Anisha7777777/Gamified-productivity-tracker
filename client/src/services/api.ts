@@ -16,6 +16,8 @@ export type Task = {
   _id: string;
   title: string;
   description: string;
+  category: string | null;
+  dueDate: string | null;
   completed: boolean;
   difficulty: "easy" | "medium" | "hard";
   xpReward: number;
@@ -26,6 +28,8 @@ export type Task = {
 export type TaskInput = {
   title: string;
   description?: string;
+  category?: string | null;
+  dueDate?: string | null;
   completed?: boolean;
   difficulty?: Task["difficulty"];
 };
@@ -162,7 +166,20 @@ export const resendVerification = () =>
     true
   );
 
-export const getTasks = () => request<Task[]>("/api/tasks", undefined, true);
+export const getTasks = (filters: {
+  status?: "all" | "active" | "completed";
+  difficulty?: Task["difficulty"];
+  category?: string;
+} = {}) => {
+  const parameters = new URLSearchParams();
+
+  if (filters.status && filters.status !== "all") parameters.set("status", filters.status);
+  if (filters.difficulty) parameters.set("difficulty", filters.difficulty);
+  if (filters.category) parameters.set("category", filters.category);
+
+  const query = parameters.toString();
+  return request<Task[]>(`/api/tasks${query ? `?${query}` : ""}`, undefined, true);
+};
 
 export const getPlayer = () => request<Player>("/api/player", undefined, true);
 

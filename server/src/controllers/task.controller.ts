@@ -27,9 +27,35 @@ const isDifficulty = (value: unknown): value is Difficulty => {
 const allowedFields = new Set([
   "title",
   "description",
+  "category",
+  "dueDate",
   "completed",
   "difficulty",
 ]);
+
+const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/;
+
+const isCalendarDate = (value: string) => {
+  if (!dateOnlyPattern.test(value)) {
+    return false;
+  }
+
+  const parts = value.split("-").map(Number);
+  const year = parts[0];
+  const month = parts[1];
+  const day = parts[2];
+
+  if (year === undefined || month === undefined || day === undefined) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+};
 
 const validateTaskBody = (
   body: unknown,
@@ -43,7 +69,7 @@ const validateTaskBody = (
   const fields = Object.keys(values);
 
   if (fields.some((field) => !allowedFields.has(field))) {
-    return "Only title, description, completed, and difficulty can be changed";
+    return "Only title, description, category, dueDate, completed, and difficulty can be changed";
   }
 
   if (options.requireTitle && !("title" in values)) {
@@ -68,6 +94,24 @@ const validateTaskBody = (
     return "Description must be a string of 500 characters or fewer";
   }
 
+  if (
+    "category" in values &&
+    values.category !== null &&
+    (typeof values.category !== "string" ||
+      !values.category.trim() ||
+      values.category.trim().length > 30)
+  ) {
+    return "Category must be a non-empty string of 30 characters or fewer";
+  }
+
+  if (
+    "dueDate" in values &&
+    values.dueDate !== null &&
+    (typeof values.dueDate !== "string" || !isCalendarDate(values.dueDate))
+  ) {
+    return "Due date must be a real calendar date in YYYY-MM-DD format";
+  }
+
   if ("completed" in values && typeof values.completed !== "boolean") {
     return "Completed must be true or false";
   }
@@ -77,6 +121,40 @@ const validateTaskBody = (
   }
 
   return null;
+};
+
+const buildTaskFilters = (query: Request["query"]) => {
+  const status = query.status;
+  const difficulty = query.difficulty;
+  const category = query.category;
+
+  if (status !== undefined && status !== "all" && status !== "active" && status !== "completed") {
+    return { error: "Status must be all, active, or completed" };
+  }
+
+  if (difficulty !== undefined && !isDifficulty(difficulty)) {
+    return { error: "Difficulty must be easy, medium, or hard" };
+  }
+
+  if (
+    category !== undefined &&
+    (typeof category !== "string" || !category.trim() || category.trim().length > 30)
+  ) {
+    return { error: "Category must be a non-empty value of 30 characters or fewer" };
+  }
+
+  const filters: {
+    completed?: boolean;
+    difficulty?: Difficulty;
+    category?: string;
+  } = {};
+
+  if (status === "active") filters.completed = false;
+  if (status === "completed") filters.completed = true;
+  if (isDifficulty(difficulty)) filters.difficulty = difficulty;
+  if (typeof category === "string") filters.category = category.trim();
+
+  return { filters };
 };
 
 const getTaskId = (value: string | string[] | undefined) => {
@@ -112,10 +190,15 @@ export const createTask = async (
 
     const requestBody = req.body as Record<string, unknown>;
     const difficulty = (requestBody.difficulty ?? "medium") as Difficulty;
+    const category =
+      typeof requestBody.category === "string"
+        ? requestBody.category.trim()
+        : null;
 
     const task = await Task.create({
       ...requestBody,
       user: userId,
+      category,
       difficulty,
       xpReward: xpByDifficulty[difficulty],
     });
@@ -133,7 +216,16 @@ export const listTasks = async (
 ) => {
   try {
     const userId = getAuthenticatedUserId(req);
-    const tasks = await Task.find({ user: userId }).sort({ createdAt: -1 });
+    const taskFilters = buildTaskFilters(req.query);
+
+    if ("error" in taskFilters) {
+      res.status(400).json({ message: taskFilters.error });
+      return;
+    }
+
+    const tasks = await Task.find({ user: userId, ...taskFilters.filters }).sort({
+      createdAt: -1,
+    });
 
     res.json(tasks);
   } catch (error) {
@@ -199,6 +291,10 @@ export const updateTask = async (
     const updates: Record<string, unknown> = {
       ...req.body,
     };
+
+    if (typeof updates.category === "string") {
+      updates.category = updates.category.trim();
+    }
 
     if (isDifficulty(updates.difficulty)) {
       updates.xpReward = xpByDifficulty[updates.difficulty];
