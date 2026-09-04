@@ -10,6 +10,19 @@ export const getJwtSecret = () => {
 
 export const getJwtExpiry = () => process.env.JWT_EXPIRES_IN || "7d";
 
+const getBooleanSetting = (
+  name: string,
+  defaultValue: boolean
+) => {
+  const value = process.env[name];
+
+  if (value === undefined) return defaultValue;
+  if (value === "true") return true;
+  if (value === "false") return false;
+
+  throw new Error(`${name} must be true or false`);
+};
+
 const durationUnits = {
   s: 1_000,
   m: 60_000,
@@ -63,6 +76,49 @@ export const getPasswordResetExpiryMs = () => {
   return minutes * 60_000;
 };
 
+export const getCookieSecure = () => {
+  const secure = getBooleanSetting(
+    "COOKIE_SECURE",
+    process.env.NODE_ENV === "production"
+  );
+
+  if (process.env.NODE_ENV === "production" && !secure) {
+    throw new Error("Production requires COOKIE_SECURE=true");
+  }
+
+  return secure;
+};
+
+export const getCookieSameSite = (): "lax" | "strict" | "none" => {
+  const sameSite = process.env.COOKIE_SAME_SITE || "lax";
+
+  if (sameSite !== "lax" && sameSite !== "strict" && sameSite !== "none") {
+    throw new Error("COOKIE_SAME_SITE must be lax, strict, or none");
+  }
+
+  if (sameSite === "none" && !getCookieSecure()) {
+    throw new Error("COOKIE_SAME_SITE=none requires COOKIE_SECURE=true");
+  }
+
+  return sameSite;
+};
+
+// Use a specific hop count when deploying behind a known reverse proxy.
+// The deliberately conservative default keeps Express from trusting all proxies.
+export const getTrustProxy = (): false | number => {
+  const value = process.env.TRUST_PROXY;
+
+  if (value === undefined || value === "" || value === "false" || value === "0") {
+    return false;
+  }
+
+  if (!/^\d+$/.test(value) || Number(value) < 1) {
+    throw new Error("TRUST_PROXY must be false or a positive proxy hop count");
+  }
+
+  return Number(value);
+};
+
 export const getEmailVerificationExpiryMs = () => {
   const hours = Number(process.env.EMAIL_VERIFICATION_EXPIRES_HOURS || 24);
 
@@ -82,4 +138,6 @@ export const validateEnvironment = () => {
   getJwtSecret();
   getAuthCookieMaxAge();
   getClientOrigin();
+  getCookieSameSite();
+  getTrustProxy();
 };

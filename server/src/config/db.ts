@@ -1,5 +1,8 @@
 import mongoose from "mongoose";
 
+export const isDatabaseReady = () =>
+  mongoose.connection.readyState === mongoose.ConnectionStates.connected;
+
 export const connectDB = async () => {
   const mongoUri = process.env.MONGODB_URI;
 

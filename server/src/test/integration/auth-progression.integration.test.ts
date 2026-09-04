@@ -5,6 +5,7 @@ import { Player } from "../../models/player.model";
 import { Task } from "../../models/task.model";
 import { User } from "../../models/user.model";
 import * as playerService from "../../services/player.service";
+import * as dbConfig from "../../config/db";
 import {
   api,
   createTestTask,
@@ -18,6 +19,31 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("operational endpoints and HTTP protection", () => {
+  it("keeps liveness independent from MongoDB and sends security headers", async () => {
+    const databaseSpy = vi.spyOn(dbConfig, "isDatabaseReady").mockReturnValue(false);
+
+    const health = await api.get("/api/health").set("Origin", "http://localhost:5173");
+
+    expect(health.status).toBe(200);
+    expect(health.body).toEqual({ status: "ok" });
+    expect(health.headers["x-content-type-options"]).toBe("nosniff");
+    expect(health.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    expect(health.headers["access-control-allow-credentials"]).toBe("true");
+    expect(databaseSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports readiness only when Mongoose is connected", async () => {
+    expect((await api.get("/api/ready")).body).toEqual({ status: "ready" });
+
+    vi.spyOn(dbConfig, "isDatabaseReady").mockReturnValue(false);
+    const unavailable = await api.get("/api/ready");
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body).toEqual({ status: "not_ready" });
+    expect(JSON.stringify(unavailable.body)).not.toMatch(/mongo|uri|error/i);
+  });
 });
 
 describe("registration and authentication", () => {
