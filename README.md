@@ -8,6 +8,20 @@ React client → Express API → MongoDB Atlas
 
 This repository contains deployment preparation only. **No external deployment was performed in Phase 10.**
 
+## Screenshots
+
+### Dashboard
+
+![Questly dashboard](docs/screenshots/questly-dashboard.png)
+
+### Calendar planning
+
+![Questly calendar planning view](docs/screenshots/questly-calendar.png)
+
+### Account settings
+
+![Questly account settings](docs/screenshots/questly-account-settings.png)
+
 ## Required environment values
 
 Create `server/.env` locally from `server/.env.example`. Never commit it.
