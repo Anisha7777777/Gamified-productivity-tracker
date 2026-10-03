@@ -18,7 +18,7 @@ export const startServer = async () => {
       console.log(`Server running on http://localhost:${port}`);
     });
   } catch (error) {
-    console.error("Failed to start server safely");
+    console.error("Failed to start server safely", error);
     process.exit(1);
   }
 };
