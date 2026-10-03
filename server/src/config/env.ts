@@ -46,7 +46,7 @@ export const getAuthCookieMaxAge = () => {
 };
 
 export const getClientOrigin = () => {
-  const origin = process.env.CLIENT_ORIGIN;
+  const origin = process.env.CLIENT_ORIGIN || process.env.RENDER_EXTERNAL_URL;
 
   if (!origin) {
     throw new Error("CLIENT_ORIGIN is missing");
