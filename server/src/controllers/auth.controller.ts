@@ -185,10 +185,7 @@ export const register = async (
   const email = req.body.email.trim().toLowerCase();
   const password = req.body.password;
 
-  if (!isEmailDeliveryConfigured()) {
-    emailServiceUnavailable(res);
-    return;
-  }
+  const emailDeliveryConfigured = isEmailDeliveryConfigured();
 
   try {
     // Validate this setting before creating an account, so a bad setting cannot
@@ -207,7 +204,14 @@ export const register = async (
     try {
       createdUser = await session.withTransaction(async () => {
         const users = await User.create(
-          [{ name, email, password: passwordHash }],
+          [
+          {
+            name,
+            email,
+            password: passwordHash,
+            emailVerified: !emailDeliveryConfigured,
+          },
+        ],
           { session }
         );
 
@@ -228,17 +232,19 @@ export const register = async (
       throw new Error("User creation failed");
     }
 
-    try {
-      await createAndSendEmailVerification(createdUser);
-    } catch {
-      // SMTP is outside MongoDB transactions. Compensate by removing only the
-      // brand-new account and its player before a session cookie is issued.
-      await Promise.all([
-        Player.deleteOne({ user: createdUser._id }),
-        User.deleteOne({ _id: createdUser._id }),
-      ]);
-      emailServiceUnavailable(res);
-      return;
+    if (emailDeliveryConfigured) {
+      try {
+        await createAndSendEmailVerification(createdUser);
+      } catch {
+        // SMTP is outside MongoDB transactions. Compensate by removing only the
+        // brand-new account and its player before a session cookie is issued.
+        await Promise.all([
+          Player.deleteOne({ user: createdUser._id }),
+          User.deleteOne({ _id: createdUser._id }),
+        ]);
+        emailServiceUnavailable(res);
+        return;
+      }
     }
 
     const token = createAuthToken(
