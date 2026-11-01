@@ -1,6 +1,4 @@
-# Questly — production preparation
-## Live Demo
-[Open Questly](https://questly-gamified-productivity.onrender.com)
+# Questly — Gamified Productivity Tracker
 
 Questly is a gamified productivity tracker.
 
@@ -8,7 +6,17 @@ Questly is a gamified productivity tracker.
 React client → Express API → MongoDB Atlas
 ```
 
-This repository contains deployment preparation only. **No external deployment was performed in Phase 10.**
+## Live Demo
+
+[Open Questly](https://questly-gamified-productivity.onrender.com)
+
+This is the demo URL listed by the project. Its current availability, deployed commit, and end-to-end functionality have not been verified in this README.
+
+## Deployment status
+
+This repository includes deployment preparation, configuration guidance, and production build commands. Phase 10 documented preparation without an external deployment. The later addition of a demo link does not establish which deployment steps were completed.
+
+**External deployment evidence required:** confirm the deployed version, hosting configuration, database connectivity, authentication behavior, and applicable checklist items before marking deployment as verified.
 
 ## Screenshots
 
@@ -53,15 +61,19 @@ npm run typecheck
 npm test
 npm run build
 npm start
+```
 
-cd ../client
+In a separate terminal, starting from the repository root:
+
+```powershell
+cd client
 npm ci
 npm run lint
 npm run build
 npm run preview
 ```
 
-The backend production command runs compiled JavaScript from `server/dist`; development remains `npm run dev`.
+The backend production command runs compiled JavaScript from `server/dist`; development remains `npm run dev`. In production, Express can also serve the built client from `client/dist`, so separate frontend and API hosting is optional. `npm run preview` is for local build inspection.
 
 ## Health checks
 
@@ -72,7 +84,7 @@ Use liveness for process monitoring and readiness before routing database-backed
 
 ## Cookies, CORS, and proxies
 
-`CLIENT_ORIGIN` must be the exact React origin. The API keeps `credentials: true` and never uses `*` for credentialed CORS.
+Set `CLIENT_ORIGIN` to the exact React origin. If it is unset, the API falls back to `RENDER_EXTERNAL_URL`; verify that this matches the frontend origin for your hosting arrangement. The API keeps `credentials: true` and never uses `*` for credentialed CORS.
 
 For one same-site deployment, use HTTPS in production with:
 
@@ -108,17 +120,19 @@ The Docker ignore files exclude `.env`, dependencies, tests, Git metadata, and b
 - Store its connection string only in the host's secret manager or server environment.
 - Never use Atlas as a substitute for the in-memory test database.
 
-## Deployment checklist
+## Deployment verification checklist
 
-- [ ] Choose a hosting provider and HTTPS domains for client and API.
-- [ ] Set server secrets in the provider, not in Git.
-- [ ] Configure the exact `CLIENT_ORIGIN`.
-- [ ] Configure cookie settings for same-site or cross-site hosting.
-- [ ] Configure `TRUST_PROXY` only when the platform uses a known proxy.
-- [ ] Restrict Atlas network access and use a least-privilege database user.
-- [ ] Configure SMTP if verification and recovery email must be delivered.
-- [ ] Build and test both services before release.
-- [ ] Point platform liveness and readiness checks to the correct endpoints.
+Unchecked items indicate that completion has not been verified here. For each completed item, record the verification date, deployed commit, and supporting evidence without exposing secrets.
+
+- [ ] Verify the hosting provider, HTTPS URL(s), and whether the client and API share one origin.
+- [ ] Verify required server secrets are configured in the provider.
+- [ ] Verify the effective client origin matches the deployed frontend.
+- [ ] Verify cookie settings and browser authentication for the actual hosting arrangement.
+- [ ] Verify `TRUST_PROXY` matches the platform's proxy topology, if applicable.
+- [ ] Verify Atlas network restrictions and a least-privilege database user.
+- [ ] Verify SMTP configuration and actual verification/recovery email delivery, if required; otherwise record this as not configured.
+- [ ] Record successful server typecheck/tests/build and client lint/build results for the deployed commit.
+- [ ] Verify live `/api/health` and `/api/ready` responses and the platform's configured health-check endpoint(s).
 
 ## Current operational limits
 
